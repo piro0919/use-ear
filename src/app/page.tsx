@@ -1,10 +1,12 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useId, useState } from "react";
-import { PWAPrompt } from "react-ios-pwa-prompt";
 import { useEar } from "../hooks/useEar";
 import { usePwa } from "../hooks/usePwa";
 import type { WakeWord } from "../types";
+
+const PWAPrompt = dynamic(() => import("react-ios-pwa-prompt"), { ssr: false });
 
 interface DetectedWord {
   id: string;
@@ -528,11 +530,7 @@ export default function Home() {
       </div>
 
       {/* iOS PWA Prompt */}
-      <PWAPrompt
-        promptOnVisit={1}
-        timesToShow={3}
-        permanentlyHideOnDismiss={false}
-      />
+      <PWAPrompt promptOnVisit={1} timesToShow={3} />
     </div>
   );
 }
