@@ -1,36 +1,150 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# use-ear
 
-## Getting Started
+React hooks for wake word detection using Web Speech API.
 
-First, run the development server:
+## Features
+
+- Wake word detection with customizable keywords
+- Multi-language support with per-word language settings
+- Mobile-friendly with audio session keep-alive
+- TypeScript support
+
+## Installation
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install use-ear
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Usage
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Basic Usage
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```tsx
+import { useEar } from "use-ear";
 
-## Learn More
+function App() {
+  const { isListening, isSupported, start, stop, transcript } = useEar({
+    wakeWords: ["hello", "hey"],
+    onWakeWord: (word, transcript) => {
+      console.log(`Detected: ${word}`);
+    },
+    language: "en-US",
+  });
 
-To learn more about Next.js, take a look at the following resources:
+  return (
+    <div>
+      <button onClick={isListening ? stop : start}>
+        {isListening ? "Stop" : "Start"}
+      </button>
+      <p>Transcript: {transcript}</p>
+    </div>
+  );
+}
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Multi-language Support
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+You can specify different languages for each wake word:
 
-## Deploy on Vercel
+```tsx
+useEar({
+  wakeWords: [
+    { word: "hello", language: "en-US" },
+    { word: "hey", language: "en-US" },
+    { word: "ヘイ", language: "ja-JP" },
+    { word: "オーケー", language: "ja-JP" },
+  ],
+  onWakeWord: (word) => {
+    console.log(`Detected: ${word}`);
+  },
+});
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+The recognition engine rotates through languages automatically.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Stop Words
+
+You can specify stop words to automatically stop listening:
+
+```tsx
+useEar({
+  wakeWords: ["hello", "hey"],
+  onWakeWord: (word) => {
+    console.log(`Detected: ${word}`);
+  },
+  stopWords: ["stop", "cancel"],
+  onStopWord: (word) => {
+    console.log(`Stopped by: ${word}`);
+  },
+});
+```
+
+### Screen Lock (Prevent Sleep)
+
+Enable `screenLock` to prevent the screen from sleeping during listening:
+
+```tsx
+useEar({
+  wakeWords: ["hello"],
+  onWakeWord: (word) => {
+    console.log(`Detected: ${word}`);
+  },
+  screenLock: true, // Keeps screen awake
+});
+```
+
+This uses the Wake Lock API to prevent the device from dimming or locking the screen. Useful for hands-free applications where you need continuous listening.
+
+## API
+
+### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `wakeWords` | `(string \| WakeWord)[]` | required | Wake words to detect |
+| `onWakeWord` | `(word: string, transcript: string) => void` | required | Callback when wake word is detected |
+| `stopWords` | `(string \| WakeWord)[]` | `[]` | Words that stop listening when detected |
+| `onStopWord` | `(word: string, transcript: string) => void` | - | Callback when stop word is detected |
+| `language` | `string` | `"ja-JP"` | Default language for speech recognition |
+| `continuous` | `boolean` | `true` | Keep listening after detection |
+| `caseSensitive` | `boolean` | `false` | Case-sensitive matching |
+| `keepAlive` | `boolean` | `true` | Keep audio session alive (for mobile) |
+| `screenLock` | `boolean` | `false` | Prevent screen from sleeping (Wake Lock API) |
+
+### Return Values
+
+| Value | Type | Description |
+|-------|------|-------------|
+| `isListening` | `boolean` | Currently listening |
+| `isSupported` | `boolean` | Browser supports Web Speech API |
+| `start` | `() => void` | Start listening |
+| `stop` | `() => void` | Stop listening |
+| `error` | `Error \| null` | Error if any |
+| `transcript` | `string` | Last recognized text |
+
+## Browser Support
+
+Web Speech API is supported in:
+- Chrome (Desktop & Android)
+- Safari (Desktop & iOS)
+- Edge
+
+## Development
+
+```bash
+# Install dependencies
+npm install
+
+# Run demo
+npm run dev
+
+# Build library
+npm run build:lib
+
+# Lint
+npm run lint
+```
+
+## License
+
+MIT

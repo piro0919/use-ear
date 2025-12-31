@@ -1,26 +1,59 @@
 {
   "name": "use-ear",
   "version": "0.1.0",
-  "private": true,
+  "description": "React hooks for wake word detection using Web Speech API",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "react",
+    "hooks",
+    "speech-recognition",
+    "wake-word",
+    "voice",
+    "web-speech-api"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/piro/use-ear"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:lib": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build:lib",
     "start": "next start",
     "lint": "biome check",
     "format": "biome format --write"
   },
-  "dependencies": {
-    "next": "16.1.1",
-    "react": "19.2.3",
-    "react-dom": "19.2.3"
+  "peerDependencies": {
+    "react": ">=18.0.0"
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.0",
+    "@serwist/turbopack": "^9.4.2",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "babel-plugin-react-compiler": "1.0.0",
+    "esbuild-wasm": "^0.27.2",
+    "next": "16.1.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-ios-pwa-prompt": "^2.0.6",
+    "serwist": "^9.4.2",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
