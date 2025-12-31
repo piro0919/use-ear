@@ -26,8 +26,13 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/piro/use-ear"
+    "url": "git+https://github.com/piro0919/use-ear.git"
   },
+  "homepage": "https://github.com/piro0919/use-ear#readme",
+  "bugs": {
+    "url": "https://github.com/piro0919/use-ear/issues"
+  },
+  "author": "piro0919",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
