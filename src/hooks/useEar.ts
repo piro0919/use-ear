@@ -170,6 +170,8 @@ export function useEar(options: UseEarOptions): UseEarReturn {
   const onStopWordRef = useRef(onStopWord);
   const languageIndexRef = useRef(0);
   const shouldContinueRef = useRef(false);
+  const detectedWordsRef = useRef<Set<string>>(new Set());
+  const lastFinalIndexRef = useRef(-1);
 
   // ワードを正規化して言語リストを取得
   const normalizedWakeWords = normalizeWakeWords(wakeWords, language);
@@ -206,14 +208,20 @@ export function useEar(options: UseEarOptions): UseEarReturn {
   const stopRef = useRef<() => void>(() => {});
 
   const checkStopWord = useCallback(
-    (text: string): boolean => {
+    (text: string, resultIndex: number): boolean => {
       const normalizedText = caseSensitive ? text : text.toLowerCase();
 
       for (const stopWord of normalizedStopWordsRef.current) {
         const normalizedWord = caseSensitive
           ? stopWord.word
           : stopWord.word.toLowerCase();
-        if (normalizedText.includes(normalizedWord)) {
+        const detectionKey = `stop:${resultIndex}:${normalizedWord}`;
+
+        if (
+          normalizedText.includes(normalizedWord) &&
+          !detectedWordsRef.current.has(detectionKey)
+        ) {
+          detectedWordsRef.current.add(detectionKey);
           onStopWordRef.current?.(stopWord.word, text);
           stopRef.current();
           return true;
@@ -225,11 +233,11 @@ export function useEar(options: UseEarOptions): UseEarReturn {
   );
 
   const checkWakeWord = useCallback(
-    (text: string) => {
+    (text: string, resultIndex: number) => {
       const normalizedText = caseSensitive ? text : text.toLowerCase();
 
       // まずストップワードをチェック
-      if (checkStopWord(text)) {
+      if (checkStopWord(text, resultIndex)) {
         return false;
       }
 
@@ -237,7 +245,13 @@ export function useEar(options: UseEarOptions): UseEarReturn {
         const normalizedWord = caseSensitive
           ? wakeWord.word
           : wakeWord.word.toLowerCase();
-        if (normalizedText.includes(normalizedWord)) {
+        const detectionKey = `wake:${resultIndex}:${normalizedWord}`;
+
+        if (
+          normalizedText.includes(normalizedWord) &&
+          !detectedWordsRef.current.has(detectionKey)
+        ) {
+          detectedWordsRef.current.add(detectionKey);
           onWakeWordRef.current(wakeWord.word, text);
           return true;
         }
@@ -273,13 +287,21 @@ export function useEar(options: UseEarOptions): UseEarReturn {
       };
 
       recognition.onresult = (event: SpeechRecognitionEvent) => {
-        const results = Array.from(event.results);
-        const latestResult = results[results.length - 1];
+        const resultIndex = event.resultIndex;
+        const result = event.results[resultIndex];
 
-        if (latestResult) {
-          const text = latestResult[0].transcript;
+        if (result) {
+          const text = result[0].transcript;
           setTranscript(text);
-          checkWakeWord(text);
+
+          // 同じresultIndexに対して、finalになったときに一度だけチェック
+          // または、中間結果でも新しいresultIndexの場合はチェック
+          if (result.isFinal || resultIndex > lastFinalIndexRef.current) {
+            checkWakeWord(text, resultIndex);
+            if (result.isFinal) {
+              lastFinalIndexRef.current = resultIndex;
+            }
+          }
         }
       };
 
@@ -295,6 +317,10 @@ export function useEar(options: UseEarOptions): UseEarReturn {
           languageIndexRef.current =
             (languageIndexRef.current + 1) % languagesRef.current.length;
           const nextLang = languagesRef.current[languageIndexRef.current];
+
+          // 言語切り替え時に検出状態をリセット
+          detectedWordsRef.current.clear();
+          lastFinalIndexRef.current = -1;
 
           // 少し遅延を入れて再開（ブラウザの制限回避）
           setTimeout(() => {
@@ -323,6 +349,8 @@ export function useEar(options: UseEarOptions): UseEarReturn {
   const start = useCallback(async () => {
     shouldContinueRef.current = true;
     languageIndexRef.current = 0;
+    detectedWordsRef.current.clear();
+    lastFinalIndexRef.current = -1;
 
     // keepAliveが有効な場合、オーディオセッションを維持
     if (keepAlive && !keepAliveRef.current) {

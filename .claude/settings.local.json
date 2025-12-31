@@ -12,7 +12,9 @@
       "Bash(npm i:*)",
       "Bash(curl:*)",
       "Bash(npm publish:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(lsof:*)",
+      "Bash(xargs kill -9)"
     ]
   }
 }

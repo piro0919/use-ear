@@ -1,6 +1,6 @@
 {
   "name": "use-ear",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "React hooks for wake word detection using Web Speech API",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -28,7 +28,7 @@
     "type": "git",
     "url": "git+https://github.com/piro0919/use-ear.git"
   },
-  "homepage": "https://github.com/piro0919/use-ear#readme",
+  "homepage": "https://use-ear.kkweb.io/",
   "bugs": {
     "url": "https://github.com/piro0919/use-ear/issues"
   },

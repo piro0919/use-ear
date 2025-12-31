@@ -2,6 +2,8 @@
 
 React hooks for wake word detection using Web Speech API.
 
+**Demo:** <https://use-ear.kkweb.io/>
+
 ## Features
 
 - Wake word detection with customizable keywords
