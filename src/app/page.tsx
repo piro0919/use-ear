@@ -44,6 +44,7 @@ export default function Home() {
   const [newWord, setNewWord] = useState("");
   const [newLanguage, setNewLanguage] = useState("ja-JP");
   const [wordType, setWordType] = useState<"wake" | "stop">("wake");
+  const [screenLock, setScreenLock] = useState(true);
 
   const {
     canInstall,
@@ -79,6 +80,7 @@ export default function Home() {
         ...prev,
       ]);
     },
+    screenLock,
   });
 
   const addWord = () => {
@@ -384,6 +386,20 @@ export default function Home() {
               )}
             </div>
           </div>
+        </div>
+
+        {/* Options */}
+        <div className="mb-6 flex items-center justify-center gap-4">
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-400">
+            <input
+              type="checkbox"
+              checked={screenLock}
+              onChange={(e) => setScreenLock(e.target.checked)}
+              disabled={isListening}
+              className="h-4 w-4 rounded border-zinc-600 bg-zinc-700 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-900"
+            />
+            <span>Prevent screen sleep</span>
+          </label>
         </div>
 
         {/* Transcript */}
