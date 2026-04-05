@@ -81,6 +81,8 @@ const createKeepAlive = (): AudioKeepAlive | null => {
 
     // ほぼ無音（完全に0だと最適化で停止される可能性がある）
     gain.gain.value = 0.001;
+    // 可聴域外の周波数にして音が聞こえないようにする
+    oscillator.frequency.value = 20;
 
     oscillator.connect(gain);
     gain.connect(context.destination);
