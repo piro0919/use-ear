@@ -60,6 +60,6 @@
     "react-ios-pwa-prompt": "^2.0.6",
     "serwist": "^9.4.2",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^6.0.0"
   }
 }
