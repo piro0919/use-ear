@@ -53,8 +53,8 @@ useEar({
   wakeWords: [
     { word: "hello", language: "en-US" },
     { word: "hey", language: "en-US" },
-    { word: "ヘイ", language: "ja-JP" },
-    { word: "オーケー", language: "ja-JP" },
+    { word: "konnichiwa", language: "ja-JP" },
+    { word: "ookei", language: "ja-JP" },
   ],
   onWakeWord: (word) => {
     console.log(`Detected: ${word}`);
