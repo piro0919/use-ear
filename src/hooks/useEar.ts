@@ -35,6 +35,7 @@ interface SpeechRecognitionInstance extends EventTarget {
   continuous: boolean;
   interimResults: boolean;
   lang: string;
+  maxAlternatives: number;
   onstart: ((this: SpeechRecognitionInstance, ev: Event) => void) | null;
   onresult:
     | ((this: SpeechRecognitionInstance, ev: SpeechRecognitionEvent) => void)
@@ -147,6 +148,22 @@ const releaseWakeLock = async (wakeLock: WakeLockSentinel | null) => {
   }
 };
 
+/**
+ * テキスト正規化: ウェイクワード照合の安定性を上げるための前処理
+ * - 空白除去 (Web Speech APIが任意位置にスペースを挿入することがある)
+ * - NFKC: 全角↔半角統一
+ * - カタカナ→ひらがな: 「ばいたる」「バイタル」を等価に扱う
+ * - 「を」→「お」: 助詞の同音異字 (Web Speech APIは「を/お」を頻繁に取り違える)
+ */
+const normalizeText = (s: string): string =>
+  s
+    .replace(/\s+/g, "")
+    .normalize("NFKC")
+    .replace(/[ァ-ヶ]/g, (m) =>
+      String.fromCharCode(m.charCodeAt(0) - 0x60),
+    )
+    .replace(/を/g, "お");
+
 export function useEar(options: UseEarOptions): UseEarReturn {
   const {
     wakeWords,
@@ -158,6 +175,9 @@ export function useEar(options: UseEarOptions): UseEarReturn {
     caseSensitive = false,
     keepAlive = true,
     screenLock = false,
+    maxAlternatives = 3,
+    normalize = true,
+    onTranscript,
   } = options;
 
   const [isListening, setIsListening] = useState(false);
@@ -170,6 +190,7 @@ export function useEar(options: UseEarOptions): UseEarReturn {
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const onWakeWordRef = useRef(onWakeWord);
   const onStopWordRef = useRef(onStopWord);
+  const onTranscriptRef = useRef(onTranscript);
   const languageIndexRef = useRef(0);
   const shouldContinueRef = useRef(false);
   const detectedWordsRef = useRef<Set<string>>(new Set());
@@ -188,12 +209,14 @@ export function useEar(options: UseEarOptions): UseEarReturn {
   useEffect(() => {
     onWakeWordRef.current = onWakeWord;
     onStopWordRef.current = onStopWord;
+    onTranscriptRef.current = onTranscript;
     normalizedWakeWordsRef.current = normalizedWakeWords;
     normalizedStopWordsRef.current = normalizedStopWords;
     languagesRef.current = languages;
   }, [
     onWakeWord,
     onStopWord,
+    onTranscript,
     normalizedWakeWords,
     normalizedStopWords,
     languages,
@@ -209,58 +232,62 @@ export function useEar(options: UseEarOptions): UseEarReturn {
 
   const stopRef = useRef<() => void>(() => {});
 
+  // 照合用にテキストを変換: 大文字小文字 + 任意の正規化処理
+  const transformForMatch = useCallback(
+    (s: string): string => {
+      let out = caseSensitive ? s : s.toLowerCase();
+      if (normalize) out = normalizeText(out);
+      return out;
+    },
+    [caseSensitive, normalize],
+  );
+
   const checkStopWord = useCallback(
-    (text: string, resultIndex: number): boolean => {
-      const normalizedText = caseSensitive ? text : text.toLowerCase();
-
+    (texts: string[], resultIndex: number): boolean => {
       for (const stopWord of normalizedStopWordsRef.current) {
-        const normalizedWord = caseSensitive
-          ? stopWord.word
-          : stopWord.word.toLowerCase();
-        const detectionKey = `stop:${resultIndex}:${normalizedWord}`;
+        const transformedWord = transformForMatch(stopWord.word);
+        const detectionKey = `stop:${resultIndex}:${transformedWord}`;
 
-        if (
-          normalizedText.includes(normalizedWord) &&
-          !detectedWordsRef.current.has(detectionKey)
-        ) {
-          detectedWordsRef.current.add(detectionKey);
-          onStopWordRef.current?.(stopWord.word, text);
-          stopRef.current();
-          return true;
+        if (detectedWordsRef.current.has(detectionKey)) continue;
+
+        for (const text of texts) {
+          if (transformForMatch(text).includes(transformedWord)) {
+            detectedWordsRef.current.add(detectionKey);
+            onStopWordRef.current?.(stopWord.word, text);
+            stopRef.current();
+            return true;
+          }
         }
       }
       return false;
     },
-    [caseSensitive],
+    [transformForMatch],
   );
 
   const checkWakeWord = useCallback(
-    (text: string, resultIndex: number) => {
-      const normalizedText = caseSensitive ? text : text.toLowerCase();
-
+    (texts: string[], resultIndex: number) => {
       // まずストップワードをチェック
-      if (checkStopWord(text, resultIndex)) {
+      if (checkStopWord(texts, resultIndex)) {
         return false;
       }
 
       for (const wakeWord of normalizedWakeWordsRef.current) {
-        const normalizedWord = caseSensitive
-          ? wakeWord.word
-          : wakeWord.word.toLowerCase();
-        const detectionKey = `wake:${resultIndex}:${normalizedWord}`;
+        const transformedWord = transformForMatch(wakeWord.word);
+        const detectionKey = `wake:${resultIndex}:${transformedWord}`;
 
-        if (
-          normalizedText.includes(normalizedWord) &&
-          !detectedWordsRef.current.has(detectionKey)
-        ) {
-          detectedWordsRef.current.add(detectionKey);
-          onWakeWordRef.current(wakeWord.word, text);
-          return true;
+        if (detectedWordsRef.current.has(detectionKey)) continue;
+
+        for (const text of texts) {
+          if (transformForMatch(text).includes(transformedWord)) {
+            detectedWordsRef.current.add(detectionKey);
+            onWakeWordRef.current(wakeWord.word, text);
+            return true;
+          }
         }
       }
       return false;
     },
-    [caseSensitive, checkStopWord],
+    [transformForMatch, checkStopWord],
   );
 
   const startWithLanguage = useCallback(
@@ -282,6 +309,7 @@ export function useEar(options: UseEarOptions): UseEarReturn {
       recognition.continuous = continuous;
       recognition.interimResults = true;
       recognition.lang = lang;
+      recognition.maxAlternatives = Math.max(1, maxAlternatives);
 
       recognition.onstart = () => {
         setIsListening(true);
@@ -293,13 +321,26 @@ export function useEar(options: UseEarOptions): UseEarReturn {
         const result = event.results[resultIndex];
 
         if (result) {
-          const text = result[0].transcript;
-          setTranscript(text);
+          // トップ候補と代替認識をまとめて取得 (照合ヒット率を上げる)
+          const alternatives: string[] = [];
+          for (let i = 0; i < result.length; i++) {
+            const alt = result[i];
+            if (alt?.transcript) alternatives.push(alt.transcript);
+          }
+          const topText = alternatives[0] ?? "";
+          setTranscript(topText);
+
+          if (onTranscriptRef.current) {
+            onTranscriptRef.current(topText, {
+              alternatives: alternatives.slice(1),
+              isFinal: result.isFinal,
+            });
+          }
 
           // 同じresultIndexに対して、finalになったときに一度だけチェック
           // または、中間結果でも新しいresultIndexの場合はチェック
           if (result.isFinal || resultIndex > lastFinalIndexRef.current) {
-            checkWakeWord(text, resultIndex);
+            checkWakeWord(alternatives, resultIndex);
             if (result.isFinal) {
               lastFinalIndexRef.current = resultIndex;
             }
@@ -345,7 +386,7 @@ export function useEar(options: UseEarOptions): UseEarReturn {
         );
       }
     },
-    [continuous, checkWakeWord],
+    [continuous, maxAlternatives, checkWakeWord],
   );
 
   const start = useCallback(async () => {
