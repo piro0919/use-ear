@@ -159,10 +159,70 @@ const normalizeText = (s: string): string =>
   s
     .replace(/\s+/g, "")
     .normalize("NFKC")
-    .replace(/[ァ-ヶ]/g, (m) =>
-      String.fromCharCode(m.charCodeAt(0) - 0x60),
-    )
+    .replace(/[ァ-ヶ]/g, (m) => String.fromCharCode(m.charCodeAt(0) - 0x60))
     .replace(/を/g, "お");
+
+// Levenshtein 距離 (1文字の挿入/削除/置換の最小回数)
+const levenshtein = (a: string, b: string): number => {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+
+  // メモリ節約のため2行だけ保持
+  let prev = new Array<number>(n + 1);
+  let curr = new Array<number>(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n];
+};
+
+/**
+ * text の中に word と類似度 threshold 以上の部分が含まれるかを判定する。
+ * word 長のスライディングウィンドウで text を走査し、各位置で類似度を計算する。
+ * 完全部分一致は早期 return で軽量化。
+ */
+const fuzzyIncludes = (
+  text: string,
+  word: string,
+  threshold: number,
+): boolean => {
+  if (text.includes(word)) return true;
+
+  const wlen = word.length;
+  if (wlen === 0) return false;
+
+  // ワードが短いほど誤発火しやすいので閾値を引き上げる
+  const effectiveThreshold = wlen <= 3 ? Math.max(threshold, 0.9) : threshold;
+
+  if (text.length < wlen) {
+    const sim = 1 - levenshtein(text, word) / wlen;
+    return sim >= effectiveThreshold;
+  }
+
+  // 多少前後の長さも見るため ±1 幅でウィンドウを取る (挿入/削除を吸収)
+  const minWin = Math.max(1, wlen - 1);
+  const maxWin = wlen + 1;
+
+  for (let winLen = minWin; winLen <= maxWin; winLen++) {
+    if (text.length < winLen) continue;
+    for (let i = 0; i <= text.length - winLen; i++) {
+      const window = text.slice(i, i + winLen);
+      const dist = levenshtein(window, word);
+      const sim = 1 - dist / Math.max(window.length, wlen);
+      if (sim >= effectiveThreshold) return true;
+    }
+  }
+  return false;
+};
 
 export function useEar(options: UseEarOptions): UseEarReturn {
   const {
@@ -177,6 +237,7 @@ export function useEar(options: UseEarOptions): UseEarReturn {
     screenLock = false,
     maxAlternatives = 3,
     normalize = true,
+    similarityThreshold,
     onTranscript,
   } = options;
 
@@ -242,6 +303,20 @@ export function useEar(options: UseEarOptions): UseEarReturn {
     [caseSensitive, normalize],
   );
 
+  const matchWord = useCallback(
+    (text: string, word: string): boolean => {
+      if (
+        typeof similarityThreshold === "number" &&
+        similarityThreshold > 0 &&
+        similarityThreshold <= 1
+      ) {
+        return fuzzyIncludes(text, word, similarityThreshold);
+      }
+      return text.includes(word);
+    },
+    [similarityThreshold],
+  );
+
   const checkStopWord = useCallback(
     (texts: string[], resultIndex: number): boolean => {
       for (const stopWord of normalizedStopWordsRef.current) {
@@ -251,7 +326,7 @@ export function useEar(options: UseEarOptions): UseEarReturn {
         if (detectedWordsRef.current.has(detectionKey)) continue;
 
         for (const text of texts) {
-          if (transformForMatch(text).includes(transformedWord)) {
+          if (matchWord(transformForMatch(text), transformedWord)) {
             detectedWordsRef.current.add(detectionKey);
             onStopWordRef.current?.(stopWord.word, text);
             stopRef.current();
@@ -261,7 +336,7 @@ export function useEar(options: UseEarOptions): UseEarReturn {
       }
       return false;
     },
-    [transformForMatch],
+    [transformForMatch, matchWord],
   );
 
   const checkWakeWord = useCallback(
@@ -278,7 +353,7 @@ export function useEar(options: UseEarOptions): UseEarReturn {
         if (detectedWordsRef.current.has(detectionKey)) continue;
 
         for (const text of texts) {
-          if (transformForMatch(text).includes(transformedWord)) {
+          if (matchWord(transformForMatch(text), transformedWord)) {
             detectedWordsRef.current.add(detectionKey);
             onWakeWordRef.current(wakeWord.word, text);
             return true;
@@ -287,7 +362,7 @@ export function useEar(options: UseEarOptions): UseEarReturn {
       }
       return false;
     },
-    [transformForMatch, checkStopWord],
+    [transformForMatch, checkStopWord, matchWord],
   );
 
   const startWithLanguage = useCallback(
