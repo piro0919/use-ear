@@ -49,7 +49,7 @@
     "@biomejs/biome": "2.4.14",
     "@serwist/turbopack": "^9.5.11",
     "@tailwindcss/postcss": "^4.2.4",
-    "@types/node": "^20.19.39",
+    "@types/node": "^24.12.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "babel-plugin-react-compiler": "1.0.0",
@@ -60,6 +60,6 @@
     "react-ios-pwa-prompt": "^2.0.6",
     "serwist": "^9.5.11",
     "tailwindcss": "^4.2.4",
-    "typescript": "^5.9.3"
+    "typescript": "^6.0.3"
   }
 }
