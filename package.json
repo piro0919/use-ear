@@ -47,7 +47,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.14",
-    "@serwist/turbopack": "^9.5.10",
+    "@serwist/turbopack": "^9.5.11",
     "@tailwindcss/postcss": "^4.2.4",
     "@types/node": "^20.19.39",
     "@types/react": "^19.2.14",
@@ -58,7 +58,7 @@
     "react": "19.2.5",
     "react-dom": "19.2.5",
     "react-ios-pwa-prompt": "^2.0.6",
-    "serwist": "^9.5.10",
+    "serwist": "^9.5.11",
     "tailwindcss": "^4.2.4",
     "typescript": "^5.9.3"
   }
