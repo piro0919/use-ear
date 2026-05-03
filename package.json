@@ -46,20 +46,20 @@
     "react": ">=19.2.5"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.2.0",
-    "@serwist/turbopack": "^9.4.2",
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
+    "@biomejs/biome": "2.4.14",
+    "@serwist/turbopack": "^9.5.10",
+    "@tailwindcss/postcss": "^4.2.4",
+    "@types/node": "^20.19.39",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "babel-plugin-react-compiler": "1.0.0",
-    "esbuild-wasm": "^0.27.2",
-    "next": "16.1.1",
-    "react": "19.2.3",
-    "react-dom": "19.2.3",
+    "esbuild-wasm": "^0.28.0",
+    "next": "16.2.4",
+    "react": "19.2.5",
+    "react-dom": "19.2.5",
     "react-ios-pwa-prompt": "^2.0.6",
-    "serwist": "^9.4.2",
-    "tailwindcss": "^4",
-    "typescript": "^5"
+    "serwist": "^9.5.10",
+    "tailwindcss": "^4.2.4",
+    "typescript": "^5.9.3"
   }
 }
