@@ -1,15 +1,17 @@
 {
   "name": "use-ear",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "description": "React hooks for wake word detection using Web Speech API",
-  "main": "./dist/index.js",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "require": "./dist/index.js"
+      "require": "./dist/index.cjs"
     }
   },
   "files": [
@@ -36,8 +38,10 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "build:lib": "tsc -p tsconfig.build.json",
-    "prepublishOnly": "npm run build:lib",
+    "build:lib": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "pnpm test && pnpm build:lib",
     "start": "next start",
     "lint": "biome check",
     "format": "biome format --write"
@@ -49,17 +53,21 @@
     "@biomejs/biome": "2.2.0",
     "@serwist/turbopack": "^9.4.2",
     "@tailwindcss/postcss": "^4",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "babel-plugin-react-compiler": "1.0.0",
     "esbuild-wasm": "^0.27.2",
+    "jsdom": "^29.1.1",
     "next": "16.1.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-ios-pwa-prompt": "^2.0.6",
     "serwist": "^9.4.2",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "tsup": "^8.5.1",
+    "typescript": "^5",
+    "vitest": "^4.1.6"
   }
 }
