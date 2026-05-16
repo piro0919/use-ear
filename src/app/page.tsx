@@ -524,8 +524,27 @@ export default function Home() {
         </div>
 
         {/* Footer */}
-        <div className="mt-8 text-center text-xs text-zinc-600">
-          Built with Web Speech API
+        <div className="mt-8 flex flex-col items-center gap-2 text-center text-xs text-zinc-600">
+          <div>Built with Web Speech API</div>
+          <div className="flex items-center gap-4">
+            <a
+              className="text-zinc-400 hover:text-zinc-200 underline"
+              href="https://github.com/piro0919/use-ear"
+              rel="noopener noreferrer"
+              target="_blank"
+            >
+              GitHub
+            </a>
+            <span>·</span>
+            <a
+              className="text-zinc-400 hover:text-zinc-200 underline"
+              href="https://www.npmjs.com/package/use-ear"
+              rel="noopener noreferrer"
+              target="_blank"
+            >
+              npm
+            </a>
+          </div>
         </div>
       </div>
 
