@@ -54,7 +54,7 @@
     "@serwist/turbopack": "^9.5.11",
     "@tailwindcss/postcss": "^4.3.0",
     "@testing-library/react": "^16.3.2",
-    "@types/node": "^20.19.41",
+    "@types/node": "^24.12.4",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "babel-plugin-react-compiler": "1.0.0",
@@ -67,7 +67,7 @@
     "serwist": "^9.5.11",
     "tailwindcss": "^4.3.0",
     "tsup": "^8.5.1",
-    "typescript": "^5.9.3",
+    "typescript": "^6.0.3",
     "vitest": "^4.1.6"
   }
 }
