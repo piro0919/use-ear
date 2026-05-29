@@ -50,7 +50,7 @@
     "react": ">=19.2.6"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.15",
+    "@biomejs/biome": "2.4.16",
     "@serwist/turbopack": "^9.5.11",
     "@tailwindcss/postcss": "^4.3.0",
     "@testing-library/react": "^16.3.2",
