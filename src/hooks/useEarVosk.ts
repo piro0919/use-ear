@@ -1,18 +1,20 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POC: オンデバイス STT (vosk-browser) 版の useEar
+// POC: オンデバイス STT (vosk-browser) 版の useEar (複数言語モデル対応版)
 //
 // 目的: Web Speech API を使わずにウェイクワード検知を行い、
 //   1. OS の音声認識通知音 (earcon) を鳴らさない
 //   2. セッション再起動なしの連続リッスン (途切れなし)
-//   3. 任意の日本語文字列を照合 (既存の照合ロジックを流用)
+//   3. 任意の文字列を照合 (既存の照合ロジックを流用)
+//   4. 複数言語モデルを同時ロードし、同じ音声を各 recognizer に流して並列照合する
 // を実機で検証する。
 //
 // vosk-browser は getUserMedia の生音声を WebWorker 上の WASM 推論に流すため、
 // OS の音声認識サービスを一切呼ばない = 構造的に earcon が鳴らない。
 //
-// 注意: これは検証用フックであり、まだライブラリの公開 API には含めない。
+// vosk-browser は optional peerDependency。使う側だけ `npm i vosk-browser` する
+// (本フックは動的 import するので、Web Speech 版だけの利用者には不要)。
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -44,7 +46,7 @@ interface VoskModel {
 type CreateModel = (modelUrl: string, logLevel?: number) => Promise<VoskModel>;
 
 export interface UseEarVoskOptions {
-  /** 検出するウェイクワード */
+  /** 検出するウェイクワード (語ごとに language を持つ) */
   wakeWords: WakeWordInput[];
   /** ウェイクワード検出時のコールバック */
   onWakeWord: (word: string, transcript: string) => void;
@@ -52,9 +54,15 @@ export interface UseEarVoskOptions {
   stopWords?: WakeWordInput[];
   /** ストップワード検出時のコールバック */
   onStopWord?: (word: string, transcript: string) => void;
-  /** モデル tar.gz の URL (default: /models/vosk-model-small-ja-0.22.tar.gz) */
+  /**
+   * 言語コード -> モデル tar.gz URL のマップ。
+   * 複数指定すると全モデルを同時ロードし、同じ音声を各 recognizer に並列で流す。
+   * 未指定なら { [language]: modelUrl } の単一モデルとして扱う。
+   */
+  models?: Record<string, string>;
+  /** 単一モデル時の URL (models 未指定時のフォールバック) */
   modelUrl?: string;
-  /** default language (照合には未使用、正規化互換のため) */
+  /** default language (bare string の語に割り当てる言語) */
   language?: string;
   /** 大文字小文字を区別しない (default: false) */
   caseSensitive?: boolean;
@@ -64,12 +72,14 @@ export interface UseEarVoskOptions {
   similarityThreshold?: number;
   /**
    * Vosk の grammar 機能でウェイクワードだけを認識対象に絞る (実験的)。
-   * 有効にすると短い語の精度が上がる場合があるが、モデル語彙に無い語で
-   * エラーになることがある。default: false (フリー認識 + あいまい照合)。
+   * 言語ごとにその言語の語で grammar を組む。
    */
   useGrammar?: boolean;
   /** 認識テキスト更新時のコールバック (partial 含む) */
-  onTranscript?: (text: string, info: { isFinal: boolean }) => void;
+  onTranscript?: (
+    text: string,
+    info: { isFinal: boolean; language: string },
+  ) => void;
 }
 
 export type VoskStatus =
@@ -80,26 +90,30 @@ export type VoskStatus =
   | "error";
 
 export interface VoskMetrics {
-  /** モデルのダウンロード + 初期化にかかった時間 (ms) */
+  /** 全モデルのロード + 初期化にかかった時間 (ms) */
   modelLoadMs: number | null;
-  /** モデルのダウンロードサイズ (bytes) */
+  /** 全モデルのダウンロード合計サイズ (bytes) */
   modelBytes: number | null;
+  /** ロード済みモデル数 (= 同時稼働 recognizer 数) */
+  modelCount: number;
   /** リッスン開始からの経過秒数 */
   uptimeSec: number;
   /**
-   * メインスレッドの詰まり具合の指標 (ms)。
-   * requestAnimationFrame の平均間隔。16.7ms が理想。
-   * vosk-browser は非推奨の ScriptProcessorNode (メインスレッド) を使うため、
-   * ここが大きく跳ねる = 音声処理でメインスレッドが詰まっている兆候。
+   * メインスレッドの詰まり具合の指標 (ms)。rAF の平均間隔。16.7ms が理想。
+   * ScriptProcessorNode (メインスレッド) が詰まると跳ねる。
    */
   avgFrameMs: number | null;
   /** rAF 間隔の最大値 (ms)。単発の大きなジャンクを捉える */
   maxFrameMs: number | null;
-  /** JS ヒープ使用量 (bytes)。Chrome 系のみ。iOS Safari では null */
+  /**
+   * JS ヒープ使用量 (bytes)。Chrome 系のみ。
+   * 注意: Vosk のモデルメモリは Worker の WASM ヒープにあり、ここには出ない。
+   * 複数モデルの本当のメモリ圧は端末の体感 (発熱/もたつき/クラッシュ) で見る。
+   */
   heapBytes: number | null;
   /** これまでに処理した音声チャンク数 */
   audioChunks: number;
-  /** onaudioprocess 1回の平均処理時間 (ms)。推論前処理の重さの指標 */
+  /** onaudioprocess 1回の平均処理時間 (ms)。全 recognizer への投入コスト */
   avgChunkMs: number | null;
 }
 
@@ -113,17 +127,39 @@ export interface UseEarVoskReturn {
   start: () => Promise<void>;
   stop: () => void;
   error: Error | null;
-  /** 直近の確定認識テキスト */
+  /** 直近の確定認識テキスト (どれかの言語) */
   transcript: string;
-  /** 現在の途中経過テキスト (連続性の可視化用) */
+  /** 現在の途中経過テキスト (どれかの言語) */
   partial: string;
   metrics: VoskMetrics;
 }
 
-const DEFAULT_MODEL_URL = "/models/vosk-model-small-ja-0.22.tar.gz";
+// 既定のモデル配信元 (Cloudflare R2 + CDN, egress 無料 / CORS 許可済み)。
+// 利用者は models / modelUrl を渡して自前ホストに差し替え可能。
+const R2_MODELS_BASE = "https://pub-0e71774c73224216b8cfc6491f897137.r2.dev";
+
+/**
+ * 言語コード -> Vosk small モデル (tar.gz) の既定 URL。
+ * models も modelUrl も未指定なら、language に対応するここの URL を単一で使う。
+ * 複数言語を同時に使いたい場合は models にこのマップの必要分を渡す。
+ */
+export const DEFAULT_MODELS: Record<string, string> = {
+  "ja-JP": `${R2_MODELS_BASE}/vosk-model-small-ja-0.22.tar.gz`,
+  "en-US": `${R2_MODELS_BASE}/vosk-model-small-en-us-0.15.tar.gz`,
+  "zh-CN": `${R2_MODELS_BASE}/vosk-model-small-cn-0.22.tar.gz`,
+  "ko-KR": `${R2_MODELS_BASE}/vosk-model-small-ko-0.22.tar.gz`,
+  "es-ES": `${R2_MODELS_BASE}/vosk-model-small-es-0.42.tar.gz`,
+  "fr-FR": `${R2_MODELS_BASE}/vosk-model-small-fr-0.22.tar.gz`,
+  "de-DE": `${R2_MODELS_BASE}/vosk-model-small-de-0.15.tar.gz`,
+};
 
 interface PerfMemory {
   usedJSHeapSize: number;
+}
+
+interface ActiveRecognizer {
+  language: string;
+  recognizer: VoskRecognizer;
 }
 
 export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
@@ -132,7 +168,8 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
     onWakeWord,
     stopWords = [],
     onStopWord,
-    modelUrl = DEFAULT_MODEL_URL,
+    models,
+    modelUrl,
     language = "ja-JP",
     caseSensitive = false,
     normalize = true,
@@ -149,6 +186,7 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
   const [metrics, setMetrics] = useState<VoskMetrics>({
     modelLoadMs: null,
     modelBytes: null,
+    modelCount: 0,
     uptimeSec: 0,
     avgFrameMs: null,
     maxFrameMs: null,
@@ -157,13 +195,24 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
     avgChunkMs: null,
   });
 
-  // 最新の options を参照から読むための ref (再レンダーで start をやり直さないため)
+  // 言語 -> モデル URL のマップを解決。
+  // models 優先。無ければ language 1言語ぶんを modelUrl か既定(R2)から引く。
+  const modelsMap = models ?? {
+    [language]: modelUrl ?? DEFAULT_MODELS[language] ?? DEFAULT_MODELS["ja-JP"],
+  };
+  // 有効言語の集合を表す安定キー (解放エフェクトの依存に使う)
+  const modelsKey = Object.keys(modelsMap).sort().join("|");
+
+  // 最新の options を参照から読むための ref
   const onWakeWordRef = useRef(onWakeWord);
   const onStopWordRef = useRef(onStopWord);
   const onTranscriptRef = useRef(onTranscript);
   const wakeWordsRef = useRef(wakeWords);
   const stopWordsRef = useRef(stopWords);
   const matchCfgRef = useRef({ caseSensitive, normalize, similarityThreshold });
+  const languageRef = useRef(language);
+  const useGrammarRef = useRef(useGrammar);
+  const modelsMapRef = useRef<Record<string, string>>(modelsMap);
   useEffect(() => {
     onWakeWordRef.current = onWakeWord;
     onStopWordRef.current = onStopWord;
@@ -171,13 +220,15 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
     wakeWordsRef.current = wakeWords;
     stopWordsRef.current = stopWords;
     matchCfgRef.current = { caseSensitive, normalize, similarityThreshold };
+    languageRef.current = language;
+    useGrammarRef.current = useGrammar;
+    modelsMapRef.current = modelsMap;
   });
 
-  // リソース ref
-  // モデルは一度ロードしたら保持し、start/stop 間で使い回す (毎回の再ロードを避ける)
-  const modelRef = useRef<VoskModel | null>(null);
-  const modelPromiseRef = useRef<Promise<VoskModel> | null>(null);
-  const recognizerRef = useRef<VoskRecognizer | null>(null);
+  // リソース ref。モデルは言語ごとに保持し、start/stop 間で使い回す。
+  const modelsRef = useRef<Map<string, VoskModel>>(new Map());
+  const modelPromisesRef = useRef<Map<string, Promise<VoskModel>>>(new Map());
+  const recognizersRef = useRef<ActiveRecognizer[]>([]);
   const audioContextRef = useRef<AudioContext | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -186,12 +237,9 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
   const rafRef = useRef<number | null>(null);
   const uptimeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // 現在の発話で既に発火したワード。1発話につき各ワード1回だけ発火させる。
-  // Vosk の partial は発話中ずっと蓄積されるため、これが無いと同じワードが
-  // partial 更新のたびに何度も発火してしまう。'result'(発話確定)でクリアする。
-  const firedWordsRef = useRef<Set<string>>(new Set());
+  // 発話ごとの発火済み管理を言語別に持つ (1発話につき各語1回)
+  const firedByLangRef = useRef<Map<string, Set<string>>>(new Map());
 
-  // メトリクス集計用の可変カウンタ (再レンダーを避けるため ref に貯めて定期的に flush)
   const perfRef = useRef({
     startedAt: 0,
     frameLast: 0,
@@ -202,32 +250,41 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
     chunkCount: 0,
   });
 
-  // partial / final 両方から呼ばれる。現在の発話で未発火のワードだけを1回発火する。
-  const runMatch = useCallback((text: string) => {
+  // 指定言語の語だけを対象に、未発火の語を1回発火する
+  const runMatch = useCallback((text: string, lang: string) => {
     if (!text) return;
     const cfg = matchCfgRef.current;
-    const transformedText = transformForMatchCore(text, cfg);
+    const tText = transformForMatchCore(text, cfg);
+    let fired = firedByLangRef.current.get(lang);
+    if (!fired) {
+      fired = new Set<string>();
+      firedByLangRef.current.set(lang, fired);
+    }
+    const def = languageRef.current;
 
-    // ストップワード優先
-    const stops = normalizeWakeWords(stopWordsRef.current, "ja-JP");
+    const stops = normalizeWakeWords(stopWordsRef.current, def).filter(
+      (w) => w.language === lang,
+    );
     for (const sw of stops) {
       const tw = transformForMatchCore(sw.word, cfg);
-      if (matchWordCore(transformedText, tw, cfg.similarityThreshold)) {
+      if (matchWordCore(tText, tw, cfg.similarityThreshold)) {
         const key = `stop:${sw.word}`;
-        if (firedWordsRef.current.has(key)) return;
-        firedWordsRef.current.add(key);
+        if (fired.has(key)) return;
+        fired.add(key);
         onStopWordRef.current?.(sw.word, text);
         return;
       }
     }
 
-    const wakes = normalizeWakeWords(wakeWordsRef.current, "ja-JP");
+    const wakes = normalizeWakeWords(wakeWordsRef.current, def).filter(
+      (w) => w.language === lang,
+    );
     for (const ww of wakes) {
       const tw = transformForMatchCore(ww.word, cfg);
-      if (matchWordCore(transformedText, tw, cfg.similarityThreshold)) {
+      if (matchWordCore(tText, tw, cfg.similarityThreshold)) {
         const key = `wake:${ww.word}`;
-        if (firedWordsRef.current.has(key)) return;
-        firedWordsRef.current.add(key);
+        if (fired.has(key)) return;
+        fired.add(key);
         onWakeWordRef.current(ww.word, text);
         return;
       }
@@ -256,14 +313,14 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
       sourceRef.current.disconnect();
       sourceRef.current = null;
     }
-    if (recognizerRef.current) {
+    for (const { recognizer } of recognizersRef.current) {
       try {
-        recognizerRef.current.remove();
+        recognizer.remove();
       } catch {
         // すでに解放済みなら無視
       }
-      recognizerRef.current = null;
     }
+    recognizersRef.current = [];
     if (mediaStreamRef.current) {
       for (const track of mediaStreamRef.current.getTracks()) track.stop();
       mediaStreamRef.current = null;
@@ -272,63 +329,80 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
       audioContextRef.current.close().catch(() => {});
       audioContextRef.current = null;
     }
-    // NOTE: モデル (modelRef) はここでは解放しない。次の start() で即再開できるよう
-    // 保持し続ける。破棄はアンマウント時のみ。
+    // モデル (modelsRef) は保持し続ける。破棄はアンマウント時のみ。
     setStatus("idle");
     setPartial("");
   }, []);
 
-  // モデルを一度だけロードしてキャッシュする。多重呼び出しは同じ Promise を共有する。
-  const ensureModel = useCallback(async (): Promise<VoskModel> => {
-    if (modelRef.current) return modelRef.current;
-    if (modelPromiseRef.current) return modelPromiseRef.current;
+  // modelsMap の全モデルを一度だけロードしてキャッシュする (並列)。
+  const ensureModels = useCallback(async (): Promise<void> => {
+    const entries = Object.entries(modelsMapRef.current);
+    const missing = entries.filter(([lang]) => !modelsRef.current.has(lang));
+    if (missing.length === 0) return;
 
-    const load = (async (): Promise<VoskModel> => {
-      setStatus("loading-model");
-      setLoadProgress(null);
-      const loadStart = performance.now();
+    setStatus("loading-model");
+    setLoadProgress(null);
+    const loadStart = performance.now();
 
-      // fetch で進捗とサイズを取得 (ブラウザ HTTP キャッシュに乗るので実DLは1回)
-      let modelBytes: number | null = null;
-      try {
-        const res = await fetch(modelUrl);
-        const total = Number(res.headers.get("content-length")) || 0;
-        if (res.body && total > 0) {
-          const reader = res.body.getReader();
-          let received = 0;
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            received += value?.length ?? 0;
-            setLoadProgress(Math.min(1, received / total));
-          }
-          modelBytes = received;
-        } else {
-          modelBytes = total || null;
+    const received: Record<string, number> = {};
+    const totals: Record<string, number> = {};
+    const updateProgress = () => {
+      const t = Object.values(totals).reduce((a, b) => a + b, 0);
+      const r = Object.values(received).reduce((a, b) => a + b, 0);
+      if (t > 0) setLoadProgress(Math.min(1, r / t));
+    };
+
+    const { createModel } = (await import("vosk-browser")) as unknown as {
+      createModel: CreateModel;
+    };
+
+    await Promise.all(
+      entries.map(async ([lang, url]) => {
+        if (modelsRef.current.has(lang)) return;
+        let p = modelPromisesRef.current.get(lang);
+        if (!p) {
+          p = (async () => {
+            try {
+              const res = await fetch(url);
+              const total = Number(res.headers.get("content-length")) || 0;
+              totals[lang] = total;
+              if (res.body && total > 0) {
+                const reader = res.body.getReader();
+                received[lang] = 0;
+                for (;;) {
+                  const { done, value } = await reader.read();
+                  if (done) break;
+                  received[lang] += value?.length ?? 0;
+                  updateProgress();
+                }
+              }
+            } catch {
+              // 進捗取得失敗は createModel が再取得するので続行
+            }
+            const model = await createModel(url);
+            modelsRef.current.set(lang, model);
+            return model;
+          })();
+          modelPromisesRef.current.set(lang, p);
         }
-      } catch {
-        // 進捗取得に失敗しても createModel 側で再取得できるので続行
-      }
+        try {
+          await p;
+        } catch (e) {
+          modelPromisesRef.current.delete(lang);
+          throw e;
+        }
+      }),
+    );
 
-      const { createModel } = (await import("vosk-browser")) as unknown as {
-        createModel: CreateModel;
-      };
-      const model = await createModel(modelUrl);
-      modelRef.current = model;
-      const modelLoadMs = performance.now() - loadStart;
-      setMetrics((m) => ({ ...m, modelLoadMs, modelBytes }));
-      setLoadProgress(1);
-      return model;
-    })();
-
-    modelPromiseRef.current = load;
-    try {
-      return await load;
-    } catch (e) {
-      modelPromiseRef.current = null; // 失敗したら次回リトライできるように
-      throw e;
-    }
-  }, [modelUrl]);
+    const totalBytes = Object.values(totals).reduce((a, b) => a + b, 0) || null;
+    setMetrics((m) => ({
+      ...m,
+      modelLoadMs: performance.now() - loadStart,
+      modelBytes: totalBytes,
+      modelCount: modelsRef.current.size,
+    }));
+    setLoadProgress(1);
+  }, []);
 
   const start = useCallback(async () => {
     if (
@@ -338,25 +412,13 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
     )
       return;
     setError(null);
-    firedWordsRef.current.clear();
+    firedByLangRef.current.clear();
 
     try {
-      // 1) モデルを用意 (初回のみロード。2回目以降は保持済みモデルを即返す)
-      const model = await ensureModel();
+      // 1) 全モデルを用意 (初回のみロード)
+      await ensureModels();
 
-      // 2) grammar (実験的): ウェイク/ストップワードだけを認識対象に絞る
-      let grammar: string | undefined;
-      if (useGrammar) {
-        const phrases = [
-          ...normalizeWakeWords(wakeWordsRef.current, language),
-          ...normalizeWakeWords(stopWordsRef.current, language),
-        ].map((w) => w.word);
-        if (phrases.length > 0) {
-          grammar = JSON.stringify([...new Set(phrases), "[unk]"]);
-        }
-      }
-
-      // 3) マイク取得
+      // 2) マイク取得
       setStatus("requesting-mic");
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         video: false,
@@ -364,7 +426,6 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
           echoCancellation: true,
           noiseSuppression: true,
           channelCount: 1,
-          // 16kHz を要求 (best-effort。実際のレートは worker 側で吸収される)
           sampleRate: 16000,
         },
       });
@@ -372,46 +433,64 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
 
       const audioContext = new AudioContext();
       audioContextRef.current = audioContext;
-      // iOS ではユーザー操作起点でも suspended のことがあるので resume
       if (audioContext.state === "suspended") {
         await audioContext.resume();
       }
 
-      const recognizer = grammar
-        ? new model.KaldiRecognizer(audioContext.sampleRate, grammar)
-        : new model.KaldiRecognizer(audioContext.sampleRate);
-      recognizerRef.current = recognizer;
+      // 3) 言語ごとに recognizer を作成 (grammar はその言語の語で)
+      const def = languageRef.current;
+      const active: ActiveRecognizer[] = [];
+      for (const lang of Object.keys(modelsMapRef.current)) {
+        const model = modelsRef.current.get(lang);
+        if (!model) continue;
 
-      recognizer.on("result", (message) => {
-        const text = message.result.text ?? "";
-        if (text) {
-          setTranscript(text);
-          onTranscriptRef.current?.(text, { isFinal: true });
-          runMatch(text);
+        let grammar: string | undefined;
+        if (useGrammarRef.current) {
+          const phrases = [
+            ...normalizeWakeWords(wakeWordsRef.current, def),
+            ...normalizeWakeWords(stopWordsRef.current, def),
+          ]
+            .filter((w) => w.language === lang)
+            .map((w) => w.word);
+          if (phrases.length > 0) {
+            grammar = JSON.stringify([...new Set(phrases), "[unk]"]);
+          }
         }
-        // 発話確定 = 発話境界。次の発話に向けて発火済みフラグをリセット
-        firedWordsRef.current.clear();
-        setPartial("");
-      });
-      recognizer.on("partialresult", (message) => {
-        const p = message.result.partial ?? "";
-        setPartial(p);
-        if (p) {
-          onTranscriptRef.current?.(p, { isFinal: false });
-          runMatch(p);
-        } else {
-          // partial が空 = 発話境界とみなしリセット
-          firedWordsRef.current.clear();
-        }
-      });
-      recognizer.on("error", (message) => {
-        setError(new Error(`vosk error: ${message.error}`));
-      });
+
+        const recognizer = grammar
+          ? new model.KaldiRecognizer(audioContext.sampleRate, grammar)
+          : new model.KaldiRecognizer(audioContext.sampleRate);
+
+        recognizer.on("result", (message) => {
+          const text = message.result.text ?? "";
+          if (text) {
+            setTranscript(text);
+            onTranscriptRef.current?.(text, { isFinal: true, language: lang });
+            runMatch(text, lang);
+          }
+          // その言語の発話境界。発火済みをリセット
+          firedByLangRef.current.get(lang)?.clear();
+        });
+        recognizer.on("partialresult", (message) => {
+          const p = message.result.partial ?? "";
+          setPartial(p);
+          if (p) {
+            onTranscriptRef.current?.(p, { isFinal: false, language: lang });
+            runMatch(p, lang);
+          } else {
+            firedByLangRef.current.get(lang)?.clear();
+          }
+        });
+        recognizer.on("error", (message) => {
+          setError(new Error(`vosk error (${lang}): ${message.error}`));
+        });
+
+        active.push({ language: lang, recognizer });
+      }
+      recognizersRef.current = active;
 
       // 4) 音声グラフ: mic -> scriptProcessor -> (silent gain) -> destination
-      //    ScriptProcessorNode は非推奨だが vosk-browser の推奨経路。
-      //    onaudioprocess を確実に発火させるため destination まで繋ぐが、
-      //    出力は書き込まないので無音 (gain=0 でさらに保険)。
+      //    onaudioprocess で全 recognizer に同じ音声を投入する。
       const source = audioContext.createMediaStreamSource(mediaStream);
       sourceRef.current = source;
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
@@ -422,11 +501,12 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
 
       processor.onaudioprocess = (event) => {
         const t0 = performance.now();
-        try {
-          recognizerRef.current?.acceptWaveform(event.inputBuffer);
-        } catch (e) {
-          // acceptWaveform の失敗は致命ではないのでログのみ
-          console.error("acceptWaveform failed", e);
+        for (const { recognizer } of recognizersRef.current) {
+          try {
+            recognizer.acceptWaveform(event.inputBuffer);
+          } catch (e) {
+            console.error("acceptWaveform failed", e);
+          }
         }
         const dt = performance.now() - t0;
         const p = perfRef.current;
@@ -449,7 +529,6 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
         chunkSum: 0,
         chunkCount: 0,
       };
-      // modelLoadMs/modelBytes は ensureModel で設定済みなので保持し、実行時系のみリセット
       setMetrics((m) => ({
         ...m,
         uptimeSec: 0,
@@ -459,7 +538,6 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
         maxFrameMs: null,
       }));
 
-      // rAF でメインスレッドの詰まり具合を測る
       const tick = (ts: number) => {
         const p = perfRef.current;
         if (p.frameLast) {
@@ -473,7 +551,6 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
       };
       rafRef.current = requestAnimationFrame(tick);
 
-      // 1秒ごとにメトリクスを state へ flush
       uptimeTimerRef.current = setInterval(() => {
         const p = perfRef.current;
         const perf = performance as Performance & { memory?: PerfMemory };
@@ -495,33 +572,57 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
       setStatus("error");
       stop();
     }
-  }, [status, ensureModel, useGrammar, language, runMatch, stop]);
+  }, [status, ensureModels, runMatch, stop]);
 
-  // モデルの事前ロード。start 前に裏で呼んでおくと初期化待ちを体感ゼロにできる。
+  // モデルの事前ロード
   const preload = useCallback(async () => {
     try {
-      await ensureModel();
-      // start に主導権を奪われていなければ idle に戻す (listening 等は保持)
+      await ensureModels();
       setStatus((s) => (s === "loading-model" ? "idle" : s));
     } catch (e) {
       setError(e instanceof Error ? e : new Error("Failed to preload model"));
       setStatus((s) => (s === "loading-model" ? "idle" : s));
     }
-  }, [ensureModel]);
+  }, [ensureModels]);
 
-  // アンマウント時のクリーンアップ: 音声リソースを止め、保持していたモデルも破棄する
+  // 選択から外れた言語のモデルをメモリ解放する。
+  // 選択変更 (modelsKey 変化) のたびに、有効マップに無く、かつ現在稼働中の
+  // recognizer にも使われていないモデルを terminate してヒープから落とす。
+  // (ページ側はリッスン中の言語切り替えを禁止しているので通常は idle 時のみ発火)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 意図的に modelsKey のみで発火
+  useEffect(() => {
+    const wanted = new Set(Object.keys(modelsMapRef.current));
+    const activeLangs = new Set(recognizersRef.current.map((r) => r.language));
+    let released = false;
+    for (const [lang, model] of modelsRef.current) {
+      if (wanted.has(lang) || activeLangs.has(lang)) continue;
+      try {
+        model.terminate();
+      } catch {
+        // 既に破棄済みなら無視
+      }
+      modelsRef.current.delete(lang);
+      modelPromisesRef.current.delete(lang);
+      released = true;
+    }
+    if (released) {
+      setMetrics((m) => ({ ...m, modelCount: modelsRef.current.size }));
+    }
+  }, [modelsKey]);
+
+  // アンマウント時のクリーンアップ: 音声リソースを止め、全モデルを破棄する
   useEffect(() => {
     return () => {
       stop();
-      modelPromiseRef.current = null;
-      if (modelRef.current) {
+      modelPromisesRef.current.clear();
+      for (const model of modelsRef.current.values()) {
         try {
-          modelRef.current.terminate();
+          model.terminate();
         } catch {
           // 既に破棄済みなら無視
         }
-        modelRef.current = null;
       }
+      modelsRef.current.clear();
     };
   }, [stop]);
 

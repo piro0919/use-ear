@@ -21,10 +21,12 @@ const serwist = new Serwist({
   clientsClaim: true,
   navigationPreload: true,
   runtimeCaching: [
-    // Vosk モデル (~48MB): CacheFirst で一度掴んだら以降ネットワーク不要・オフライン可。
+    // Vosk モデル (~40-90MB): CacheFirst で一度掴んだら以降ネットワーク不要・オフライン可。
+    // モデルは R2 CDN (クロスオリジン) 配信なので pathname の .tar.gz でも拾う。
     // defaultCache より先に置いて先勝ちさせる。
     {
-      matcher: ({ url }) => url.pathname.startsWith("/models/"),
+      matcher: ({ url }) =>
+        url.pathname.startsWith("/models/") || url.pathname.endsWith(".tar.gz"),
       handler: new CacheFirst({
         cacheName: "vosk-models",
         plugins: [

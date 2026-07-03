@@ -4,14 +4,14 @@
 // POC 検証ページ: オンデバイス STT (vosk-browser) 版のウェイクワード検知
 //
 // 実機 (iPhone Safari / Android Chrome) で以下を確認するための画面:
-//   1. earcon (ピコ音) が鳴らないか  → 耳で確認
-//   2. 連続リッスンが途切れないか      → Partial が途切れず更新され続けるか
-//   3. 任意の日本語ワードを拾えるか    → Detection Log
-//   4. CPU/メインスレッド負荷・発熱    → Metrics (avg/max frame ms, chunk ms)
+//   1. earcon (ピコ音) が鳴らないか       → 耳で確認
+//   2. 連続リッスンが途切れないか          → Partial が途切れず更新され続けるか
+//   3. 任意のワードを拾えるか (多言語)     → Detection Log
+//   4. 複数モデル同時のCPU/メモリ/発熱     → Metrics (Models 数, frame ms) + 体感
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useEffect, useId, useRef, useState } from "react";
-import { useEarVosk } from "../../hooks/useEarVosk";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { DEFAULT_MODELS, useEarVosk } from "../../hooks/useEarVosk";
 import type { WakeWord } from "../../types";
 
 interface DetectedWord {
@@ -22,13 +22,32 @@ interface DetectedWord {
   type: "wake" | "stop";
 }
 
+// 言語 -> モデル tar.gz URL。ライブラリ既定 (Cloudflare R2 CDN) をそのまま使う。
+const MODEL_URLS = DEFAULT_MODELS;
+const LANG_LABEL: Record<string, string> = {
+  "ja-JP": "日本語",
+  "en-US": "English",
+  "zh-CN": "中文",
+  "ko-KR": "한국어",
+  "es-ES": "Español",
+  "fr-FR": "Français",
+  "de-DE": "Deutsch",
+};
+const ALL_LANGS = Object.keys(MODEL_URLS);
+// デフォルトは日本語のみロード (軽く開始し、必要な言語だけチェックして足す)
+const DEFAULT_LANGS = ["ja-JP"];
+
 const defaultWakeWords: WakeWord[] = [
   { word: "こんにちは", language: "ja-JP" },
-  { word: "おはよう", language: "ja-JP" },
   { word: "ねえ", language: "ja-JP" },
+  { word: "hello", language: "en-US" },
+  { word: "computer", language: "en-US" },
 ];
 
-const defaultStopWords: WakeWord[] = [{ word: "ストップ", language: "ja-JP" }];
+const defaultStopWords: WakeWord[] = [
+  { word: "ストップ", language: "ja-JP" },
+  { word: "stop", language: "en-US" },
+];
 
 const fmtBytes = (b: number | null): string => {
   if (b == null) return "—";
@@ -39,6 +58,8 @@ const fmtBytes = (b: number | null): string => {
 
 const fmtMs = (n: number | null, digits = 1): string =>
   n == null ? "—" : `${n.toFixed(digits)} ms`;
+
+const langShort = (l: string): string => l.split("-")[0];
 
 function Metric({
   label,
@@ -75,9 +96,23 @@ export default function VoskPocPage() {
   const [wakeWords, setWakeWords] = useState<WakeWord[]>(defaultWakeWords);
   const [stopWords, setStopWords] = useState<WakeWord[]>(defaultStopWords);
   const [newWord, setNewWord] = useState("");
+  const [newLang, setNewLang] = useState("ja-JP");
   const [wordType, setWordType] = useState<"wake" | "stop">("wake");
-  const [useGrammar, setUseGrammar] = useState(false);
+  const [useGrammar, setUseGrammar] = useState(true);
   const [fuzzy, setFuzzy] = useState(true);
+  const [enabledLangs, setEnabledLangs] = useState<string[]>(DEFAULT_LANGS);
+
+  // 有効な言語だけのモデルマップ
+  const models = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const l of enabledLangs) m[l] = MODEL_URLS[l];
+    return m;
+  }, [enabledLangs]);
+  // 選択集合を表す安定キー (選択変更で先読みを再実行するため)
+  const modelsKey = useMemo(
+    () => [...enabledLangs].sort().join("|"),
+    [enabledLangs],
+  );
 
   const {
     status,
@@ -93,6 +128,7 @@ export default function VoskPocPage() {
   } = useEarVosk({
     wakeWords,
     stopWords,
+    models,
     useGrammar,
     similarityThreshold: fuzzy ? 0.7 : undefined,
     onWakeWord: (word, fullTranscript) => {
@@ -121,15 +157,18 @@ export default function VoskPocPage() {
     },
   });
 
-  // ページ表示時に裏でモデルを事前ロード (2回目以降の訪問はキャッシュから即時)
+  // 表示時 + 言語選択が変わるたびに、チェック済み言語を裏で先読みする。
+  // (外した言語はフック側が terminate してメモリ解放するので、ここは追加のみ)
+  // modelsKey は「選択変化で再実行する」ための意図的なトリガー依存。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 選択変化で先読みを再発火させる
   useEffect(() => {
     preload();
-  }, [preload]);
+  }, [preload, modelsKey]);
 
   const addWord = () => {
     const trimmed = newWord.trim();
     if (!trimmed) return;
-    const obj = { word: trimmed, language: "ja-JP" };
+    const obj = { word: trimmed, language: newLang };
     if (wordType === "wake") {
       if (!wakeWords.some((w) => w.word === trimmed)) {
         setWakeWords((p) => [...p, obj]);
@@ -140,15 +179,21 @@ export default function VoskPocPage() {
     setNewWord("");
   };
 
+  const toggleLang = (lang: string) => {
+    setEnabledLangs((prev) =>
+      prev.includes(lang) ? prev.filter((l) => l !== lang) : [...prev, lang],
+    );
+  };
+
   const statusLabel: Record<string, string> = {
     idle: "Idle",
-    "loading-model": "Loading model…",
+    "loading-model": "Loading models…",
     "requesting-mic": "Requesting mic…",
     listening: "Listening (on-device)",
     error: "Error",
   };
 
-  const frameWarn = (metrics.avgFrameMs ?? 0) > 22; // 60fps=16.7ms。22ms超で軽いジャンク
+  const frameWarn = (metrics.avgFrameMs ?? 0) > 22;
   const frameBad = (metrics.maxFrameMs ?? 0) > 120;
 
   return (
@@ -157,37 +202,36 @@ export default function VoskPocPage() {
         {/* Header */}
         <div className="mb-8 text-center">
           <div className="mb-2 inline-block rounded-full bg-indigo-500/10 px-3 py-1 text-xs font-medium text-indigo-300">
-            POC · on-device STT (vosk-browser)
+            POC · on-device STT (vosk-browser) · multi-model
           </div>
           <h1 className="mb-1 text-3xl font-bold tracking-tight text-white">
             useEar / Vosk
           </h1>
           <p className="text-sm text-zinc-400">
-            No Web Speech API · No earcon · Continuous · Fully client-side
+            No Web Speech API · No earcon · Continuous · Multi-language
           </p>
         </div>
 
-        {/* How-to (real device checklist) */}
+        {/* How-to */}
         <details className="mb-6 rounded-xl border border-zinc-700/50 bg-zinc-800/30 p-4 text-sm text-zinc-400">
           <summary className="cursor-pointer font-medium text-zinc-300">
             実機テストの見方
           </summary>
           <ul className="mt-3 list-disc space-y-1 pl-5">
             <li>
-              <b>earcon</b>: Start してもピコ音が鳴らなければ ✓（OS
-              音声認識を使っていない証拠）
+              <b>多言語同時</b>: 下の Models で日本語＋English を両方ON =
+              2モデル並列。日本語「こんにちは」も英語「hello」も同時に拾えるか
             </li>
             <li>
-              <b>連続性</b>: 話している間 Partial
-              が途切れず更新され続ければ、セッション再起動なしの連続リッスン ✓
+              <b>earcon</b>: Start してもピコ音が鳴らなければ ✓
             </li>
             <li>
-              <b>精度</b>: ウェイクワードを言って Detection Log に載れば ✓。
-              Fuzzy を切ると完全一致のみになる
+              <b>連続性</b>: 話している間 Partial が途切れず更新され続ければ ✓
             </li>
             <li>
-              <b>負荷</b>: Avg/Max frame ms が跳ねる = メインスレッドの詰まり
-              (ScriptProcessorNode の影響)。発熱・電池は端末側で体感確認
+              <b>負荷/メモリ</b>: 2モデルで Avg/Max frame ms が跳ねないか＋
+              <b>数分使って発熱・もたつき・クラッシュが無いか</b>
+              （Voskのメモリは Worker 側なので JS heap には出ない＝体感で見る）
             </li>
           </ul>
         </details>
@@ -197,7 +241,11 @@ export default function VoskPocPage() {
           <button
             type="button"
             onClick={isListening ? stop : start}
-            disabled={status === "loading-model" || status === "requesting-mic"}
+            disabled={
+              status === "loading-model" ||
+              status === "requesting-mic" ||
+              enabledLangs.length === 0
+            }
             className={`h-28 w-28 rounded-full font-medium text-white transition-all ${
               isListening
                 ? "bg-gradient-to-br from-red-500 to-red-600 shadow-lg shadow-red-500/30"
@@ -226,8 +274,37 @@ export default function VoskPocPage() {
           </div>
         )}
 
+        {/* Model selector */}
+        <div className="mb-6 rounded-2xl border border-zinc-700/50 bg-zinc-800/30 p-5">
+          <div className="mb-2 text-[10px] uppercase tracking-wider text-zinc-500">
+            Language models (同時ロード)
+          </div>
+          <div className="flex flex-wrap gap-4">
+            {ALL_LANGS.map((lang) => (
+              <label
+                key={lang}
+                className="flex cursor-pointer items-center gap-2 text-sm text-zinc-300"
+              >
+                <input
+                  type="checkbox"
+                  checked={enabledLangs.includes(lang)}
+                  onChange={() => toggleLang(lang)}
+                  disabled={isListening}
+                  className="h-4 w-4 rounded border-zinc-600 bg-zinc-700 text-indigo-500"
+                />
+                <span>{LANG_LABEL[lang]}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
         {/* Metrics */}
         <div className="mb-6 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <Metric
+            label="Models"
+            value={String(metrics.modelCount)}
+            hint="parallel"
+          />
           <Metric
             label="Model load"
             value={fmtMs(metrics.modelLoadMs, 0)}
@@ -249,7 +326,6 @@ export default function VoskPocPage() {
           <Metric label="Audio chunks" value={String(metrics.audioChunks)} />
           <Metric label="Avg chunk" value={fmtMs(metrics.avgChunkMs, 2)} />
           <Metric label="JS heap" value={fmtBytes(metrics.heapBytes)} />
-          <Metric label="Earcon" value="none" hint="by design" />
         </div>
 
         {/* Live transcript / partial */}
@@ -283,10 +359,22 @@ export default function VoskPocPage() {
               className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm text-zinc-200 placeholder-zinc-500 focus:border-indigo-500 focus:outline-none disabled:opacity-50"
             />
             <select
+              value={newLang}
+              onChange={(e) => setNewLang(e.target.value)}
+              disabled={isListening}
+              className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-2 text-sm text-zinc-200 focus:border-indigo-500 focus:outline-none disabled:opacity-50"
+            >
+              {ALL_LANGS.map((l) => (
+                <option key={l} value={l}>
+                  {langShort(l)}
+                </option>
+              ))}
+            </select>
+            <select
               value={wordType}
               onChange={(e) => setWordType(e.target.value as "wake" | "stop")}
               disabled={isListening}
-              className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-200 focus:border-indigo-500 focus:outline-none disabled:opacity-50"
+              className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-2 text-sm text-zinc-200 focus:border-indigo-500 focus:outline-none disabled:opacity-50"
             >
               <option value="wake">Wake</option>
               <option value="stop">Stop</option>
@@ -304,10 +392,13 @@ export default function VoskPocPage() {
           <div className="mb-3 flex flex-wrap gap-2">
             {wakeWords.map((w) => (
               <span
-                key={w.word}
-                className="flex items-center gap-2 rounded-full border border-indigo-700/50 bg-indigo-900/20 py-1 pl-3 pr-2 text-sm text-indigo-300"
+                key={`${w.language}:${w.word}`}
+                className="flex items-center gap-1.5 rounded-full border border-indigo-700/50 bg-indigo-900/20 py-1 pl-3 pr-2 text-sm text-indigo-300"
               >
                 {w.word}
+                <span className="text-[10px] text-indigo-500/70">
+                  {langShort(w.language)}
+                </span>
                 <button
                   type="button"
                   onClick={() =>
@@ -322,10 +413,13 @@ export default function VoskPocPage() {
             ))}
             {stopWords.map((w) => (
               <span
-                key={w.word}
-                className="flex items-center gap-2 rounded-full border border-red-700/50 bg-red-900/20 py-1 pl-3 pr-2 text-sm text-red-300"
+                key={`${w.language}:${w.word}`}
+                className="flex items-center gap-1.5 rounded-full border border-red-700/50 bg-red-900/20 py-1 pl-3 pr-2 text-sm text-red-300"
               >
                 {w.word}
+                <span className="text-[10px] text-red-500/70">
+                  {langShort(w.language)}
+                </span>
                 <button
                   type="button"
                   onClick={() =>
@@ -359,7 +453,7 @@ export default function VoskPocPage() {
                 disabled={isListening}
                 className="h-4 w-4 rounded border-zinc-600 bg-zinc-700 text-indigo-500"
               />
-              <span>Grammar mode (実験的)</span>
+              <span>Grammar mode</span>
             </label>
           </div>
         </div>
@@ -414,7 +508,7 @@ export default function VoskPocPage() {
         </div>
 
         <div className="mt-8 text-center text-xs text-zinc-600">
-          Model: vosk-model-small-ja-0.22 (Apache-2.0) ·{" "}
+          Models: vosk small ×7 langs via Cloudflare R2 (Apache-2.0) ·{" "}
           <a href="/" className="text-zinc-400 underline hover:text-zinc-200">
             ← Web Speech API demo
           </a>

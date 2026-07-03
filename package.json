@@ -47,7 +47,13 @@
     "format": "biome format --write"
   },
   "peerDependencies": {
-    "react": ">=19.2.7"
+    "react": ">=19.2.7",
+    "vosk-browser": ">=0.0.8"
+  },
+  "peerDependenciesMeta": {
+    "vosk-browser": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.1",
@@ -68,9 +74,7 @@
     "tailwindcss": "^4.3.1",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.9"
-  },
-  "dependencies": {
+    "vitest": "^4.1.9",
     "vosk-browser": "^0.0.8"
   }
 }
