@@ -108,6 +108,8 @@ export interface UseEarVoskReturn {
   isListening: boolean;
   /** モデルロードの進捗 (0〜1)。取得できない場合は null */
   loadProgress: number | null;
+  /** モデルを事前ロードする (start 前に裏で呼ぶと初期化待ちを隠せる) */
+  preload: () => Promise<void>;
   start: () => Promise<void>;
   stop: () => void;
   error: Error | null;
@@ -495,6 +497,18 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
     }
   }, [status, ensureModel, useGrammar, language, runMatch, stop]);
 
+  // モデルの事前ロード。start 前に裏で呼んでおくと初期化待ちを体感ゼロにできる。
+  const preload = useCallback(async () => {
+    try {
+      await ensureModel();
+      // start に主導権を奪われていなければ idle に戻す (listening 等は保持)
+      setStatus((s) => (s === "loading-model" ? "idle" : s));
+    } catch (e) {
+      setError(e instanceof Error ? e : new Error("Failed to preload model"));
+      setStatus((s) => (s === "loading-model" ? "idle" : s));
+    }
+  }, [ensureModel]);
+
   // アンマウント時のクリーンアップ: 音声リソースを止め、保持していたモデルも破棄する
   useEffect(() => {
     return () => {
@@ -515,6 +529,7 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
     status,
     isListening: status === "listening",
     loadProgress,
+    preload,
     start,
     stop,
     error,

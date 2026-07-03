@@ -1,6 +1,11 @@
 import { defaultCache } from "@serwist/turbopack/worker";
 import type { PrecacheEntry, SerwistGlobalConfig } from "serwist";
-import { Serwist } from "serwist";
+import {
+  CacheableResponsePlugin,
+  CacheFirst,
+  ExpirationPlugin,
+  Serwist,
+} from "serwist";
 
 declare global {
   interface WorkerGlobalScope extends SerwistGlobalConfig {
@@ -15,7 +20,25 @@ const serwist = new Serwist({
   skipWaiting: true,
   clientsClaim: true,
   navigationPreload: true,
-  runtimeCaching: defaultCache,
+  runtimeCaching: [
+    // Vosk モデル (~48MB): CacheFirst で一度掴んだら以降ネットワーク不要・オフライン可。
+    // defaultCache より先に置いて先勝ちさせる。
+    {
+      matcher: ({ url }) => url.pathname.startsWith("/models/"),
+      handler: new CacheFirst({
+        cacheName: "vosk-models",
+        plugins: [
+          new CacheableResponsePlugin({ statuses: [0, 200] }),
+          new ExpirationPlugin({
+            maxEntries: 4,
+            maxAgeSeconds: 30 * 24 * 60 * 60,
+            purgeOnQuotaError: true,
+          }),
+        ],
+      }),
+    },
+    ...defaultCache,
+  ],
   fallbacks: {
     entries: [
       {

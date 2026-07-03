@@ -10,7 +10,7 @@
 //   4. CPU/メインスレッド負荷・発熱    → Metrics (avg/max frame ms, chunk ms)
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useEarVosk } from "../../hooks/useEarVosk";
 import type { WakeWord } from "../../types";
 
@@ -83,6 +83,7 @@ export default function VoskPocPage() {
     status,
     isListening,
     loadProgress,
+    preload,
     start,
     stop,
     error,
@@ -119,6 +120,11 @@ export default function VoskPocPage() {
       ]);
     },
   });
+
+  // ページ表示時に裏でモデルを事前ロード (2回目以降の訪問はキャッシュから即時)
+  useEffect(() => {
+    preload();
+  }, [preload]);
 
   const addWord = () => {
     const trimmed = newWord.trim();
