@@ -172,7 +172,9 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
   });
 
   // リソース ref
+  // モデルは一度ロードしたら保持し、start/stop 間で使い回す (毎回の再ロードを避ける)
   const modelRef = useRef<VoskModel | null>(null);
+  const modelPromiseRef = useRef<Promise<VoskModel> | null>(null);
   const recognizerRef = useRef<VoskRecognizer | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
@@ -268,30 +270,23 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
       audioContextRef.current.close().catch(() => {});
       audioContextRef.current = null;
     }
-    if (modelRef.current) {
-      try {
-        modelRef.current.terminate();
-      } catch {
-        // 無視
-      }
-      modelRef.current = null;
-    }
+    // NOTE: モデル (modelRef) はここでは解放しない。次の start() で即再開できるよう
+    // 保持し続ける。破棄はアンマウント時のみ。
     setStatus("idle");
     setPartial("");
   }, []);
 
-  const start = useCallback(async () => {
-    if (status === "listening" || status === "loading-model") return;
-    setError(null);
-    firedWordsRef.current.clear();
+  // モデルを一度だけロードしてキャッシュする。多重呼び出しは同じ Promise を共有する。
+  const ensureModel = useCallback(async (): Promise<VoskModel> => {
+    if (modelRef.current) return modelRef.current;
+    if (modelPromiseRef.current) return modelPromiseRef.current;
 
-    try {
-      // 1) モデルのダウンロードサイズを測りつつキャッシュ経由でロード
+    const load = (async (): Promise<VoskModel> => {
       setStatus("loading-model");
       setLoadProgress(null);
       const loadStart = performance.now();
 
-      // fetch で進捗とサイズを取得 (Cache API がキャッシュしてくれる)
+      // fetch で進捗とサイズを取得 (ブラウザ HTTP キャッシュに乗るので実DLは1回)
       let modelBytes: number | null = null;
       try {
         const res = await fetch(modelUrl);
@@ -299,7 +294,6 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
         if (res.body && total > 0) {
           const reader = res.body.getReader();
           let received = 0;
-          // 進捗を読むだけ (中身は破棄、ブラウザ HTTP キャッシュに残る)
           for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
@@ -320,6 +314,33 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
       const model = await createModel(modelUrl);
       modelRef.current = model;
       const modelLoadMs = performance.now() - loadStart;
+      setMetrics((m) => ({ ...m, modelLoadMs, modelBytes }));
+      setLoadProgress(1);
+      return model;
+    })();
+
+    modelPromiseRef.current = load;
+    try {
+      return await load;
+    } catch (e) {
+      modelPromiseRef.current = null; // 失敗したら次回リトライできるように
+      throw e;
+    }
+  }, [modelUrl]);
+
+  const start = useCallback(async () => {
+    if (
+      status === "listening" ||
+      status === "loading-model" ||
+      status === "requesting-mic"
+    )
+      return;
+    setError(null);
+    firedWordsRef.current.clear();
+
+    try {
+      // 1) モデルを用意 (初回のみロード。2回目以降は保持済みモデルを即返す)
+      const model = await ensureModel();
 
       // 2) grammar (実験的): ウェイク/ストップワードだけを認識対象に絞る
       let grammar: string | undefined;
@@ -426,10 +447,9 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
         chunkSum: 0,
         chunkCount: 0,
       };
+      // modelLoadMs/modelBytes は ensureModel で設定済みなので保持し、実行時系のみリセット
       setMetrics((m) => ({
         ...m,
-        modelLoadMs,
-        modelBytes,
         uptimeSec: 0,
         audioChunks: 0,
         avgChunkMs: null,
@@ -473,12 +493,21 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
       setStatus("error");
       stop();
     }
-  }, [status, modelUrl, useGrammar, language, runMatch, stop]);
+  }, [status, ensureModel, useGrammar, language, runMatch, stop]);
 
-  // アンマウント時のクリーンアップ
+  // アンマウント時のクリーンアップ: 音声リソースを止め、保持していたモデルも破棄する
   useEffect(() => {
     return () => {
       stop();
+      modelPromiseRef.current = null;
+      if (modelRef.current) {
+        try {
+          modelRef.current.terminate();
+        } catch {
+          // 既に破棄済みなら無視
+        }
+        modelRef.current = null;
+      }
     };
   }, [stop]);
 
