@@ -167,7 +167,7 @@ Vosk needs a language model (a `.tar.gz` of a Vosk "small" model). It is **never
 
 > Tip: `useGrammar` constrains recognition to your wake/stop words per language, which noticeably improves accuracy for short phrases.
 
-## API
+## API — `useEar` (Web Speech API)
 
 ### Options
 
@@ -193,6 +193,45 @@ Vosk needs a language model (a `.tar.gz` of a Vosk "small" model). It is **never
 | `stop` | `() => void` | Stop listening |
 | `error` | `Error \| null` | Error if any |
 | `transcript` | `string` | Last recognized text |
+
+## API — `useEarVosk` (on-device)
+
+Requires the optional peer dependency: `npm install vosk-browser`.
+
+### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `wakeWords` | `(string \| WakeWord)[]` | required | Wake words to detect (per-word `language`) |
+| `onWakeWord` | `(word: string, transcript: string) => void` | required | Callback when a wake word is detected |
+| `stopWords` | `(string \| WakeWord)[]` | `[]` | Words that stop listening when detected |
+| `onStopWord` | `(word: string, transcript: string) => void` | - | Callback when a stop word is detected |
+| `models` | `Record<string, string>` | - | `language` → model `.tar.gz` URL. Multiple entries load in parallel and match each language against its own recognizer |
+| `modelUrl` | `string` | - | Single-model URL (used when `models` is omitted) |
+| `language` | `string` | `"ja-JP"` | Language for bare-string words, and the single default model |
+| `caseSensitive` | `boolean` | `false` | Case-sensitive matching |
+| `normalize` | `boolean` | `true` | Normalize text before matching |
+| `similarityThreshold` | `number` | - | Fuzzy-match threshold (0–1). Omit for exact substring matching |
+| `useGrammar` | `boolean` | `false` | Constrain recognition to your wake/stop words per language (improves short-phrase accuracy; may error on words outside the model vocabulary) |
+| `onTranscript` | `(text: string, info: { isFinal: boolean; language: string }) => void` | - | Recognition update callback (includes partials) |
+
+Model resolution: `models` wins; otherwise the single `language` model is taken from `modelUrl` or, if omitted, from `DEFAULT_MODELS[language]` (the default CDN).
+
+### Return Values
+
+| Value | Type | Description |
+|-------|------|-------------|
+| `status` | `"idle" \| "loading-model" \| "requesting-mic" \| "listening" \| "error"` | Engine state |
+| `isListening` | `boolean` | Currently listening |
+| `isSupported` | `boolean` | Environment can run on-device STT (AudioContext + getUserMedia + WebAssembly). `false` during SSR; resolves after mount |
+| `loadProgress` | `number \| null` | Model download progress (0–1) |
+| `preload` | `() => Promise<void>` | Warm the model(s) before `start()` |
+| `start` | `() => Promise<void>` | Start listening (loads models if needed) |
+| `stop` | `() => void` | Stop listening (keeps models in memory for the next start) |
+| `error` | `Error \| null` | Error if any |
+| `transcript` | `string` | Last final recognized text |
+| `partial` | `string` | Current in-progress text |
+| `metrics` | `VoskMetrics` | On-device diagnostics: model load time/size, model count, main-thread frame timing, audio-chunk cost |
 
 ## Browser Support
 
