@@ -134,9 +134,9 @@ export interface UseEarVoskReturn {
   metrics: VoskMetrics;
 }
 
-// 既定のモデル配信元 (Cloudflare R2 + CDN, egress 無料 / CORS 許可済み)。
-// 利用者は models / modelUrl を渡して自前ホストに差し替え可能。
-const R2_MODELS_BASE = "https://pub-0e71774c73224216b8cfc6491f897137.r2.dev";
+// 既定のモデル配信元 (Cloudflare R2 のカスタムドメイン, CDN 前段 / egress 無料 /
+// CORS 許可済み)。利用者は models / modelUrl を渡して自前ホストに差し替え可能。
+const R2_MODELS_BASE = "https://models.use-ear.kkweb.io";
 
 /**
  * 言語コード -> Vosk small モデル (tar.gz) の既定 URL。
