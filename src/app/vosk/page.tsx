@@ -1,13 +1,16 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POC 検証ページ: オンデバイス STT (vosk-browser) 版のウェイクワード検知
+// デモ (experimental): オンデバイス STT (vosk-browser) 版のウェイクワード検知
 //
-// 実機 (iPhone Safari / Android Chrome) で以下を確認するための画面:
-//   1. earcon (ピコ音) が鳴らないか       → 耳で確認
-//   2. 連続リッスンが途切れないか          → Partial が途切れず更新され続けるか
-//   3. 任意のワードを拾えるか (多言語)     → Detection Log
-//   4. 複数モデル同時のCPU/メモリ/発熱     → Metrics (Models 数, frame ms) + 体感
+// このページで体感できること:
+//   1. earcon (ピコ音) が鳴らない          → 耳で確認
+//   2. 連続リッスンが途切れない            → Partial が途切れず更新され続ける
+//   3. 任意のワードを多言語で拾える         → Detection Log
+//   4. 複数モデル同時の CPU/メモリ/発熱     → Metrics (Models 数, frame ms) + 体感
+//
+// experimental: iOS Safari の ScriptProcessorNode 安定性や、多モデル時の
+// メモリ圧・発熱は端末差が大きい。使う際は対象端末で体感確認を推奨。
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
@@ -202,7 +205,7 @@ export default function VoskPocPage() {
         {/* Header */}
         <div className="mb-8 text-center">
           <div className="mb-2 inline-block rounded-full bg-indigo-500/10 px-3 py-1 text-xs font-medium text-indigo-300">
-            POC · on-device STT (vosk-browser) · multi-model
+            Experimental · on-device STT (vosk-browser)
           </div>
           <h1 className="mb-1 text-3xl font-bold tracking-tight text-white">
             useEar / Vosk
@@ -215,23 +218,25 @@ export default function VoskPocPage() {
         {/* How-to */}
         <details className="mb-6 rounded-xl border border-zinc-700/50 bg-zinc-800/30 p-4 text-sm text-zinc-400">
           <summary className="cursor-pointer font-medium text-zinc-300">
-            実機テストの見方
+            使い方・見どころ
           </summary>
           <ul className="mt-3 list-disc space-y-1 pl-5">
             <li>
               <b>多言語同時</b>: 下の Models で日本語＋English を両方ON =
-              2モデル並列。日本語「こんにちは」も英語「hello」も同時に拾えるか
+              2モデル並列。日本語「こんにちは」も英語「hello」も同時に拾える
             </li>
             <li>
-              <b>earcon</b>: Start してもピコ音が鳴らなければ ✓
+              <b>earcon なし</b>: Start してもOSのピコ音が鳴らない（on-device
+              なので）
             </li>
             <li>
-              <b>連続性</b>: 話している間 Partial が途切れず更新され続ければ ✓
+              <b>連続リッスン</b>: 話している間 Partial が途切れず更新され続ける
             </li>
             <li>
-              <b>負荷/メモリ</b>: 2モデルで Avg/Max frame ms が跳ねないか＋
-              <b>数分使って発熱・もたつき・クラッシュが無いか</b>
-              （Voskのメモリは Worker 側なので JS heap には出ない＝体感で見る）
+              <b>負荷/メモリ</b>: Avg/Max frame ms
+              でメインスレッドの詰まりを可視化。 モデルのメモリは Worker
+              側なので JS heap には出ない（端末の体感で見る）。 iOS Safari
+              など端末差があるため experimental
             </li>
           </ul>
         </details>
