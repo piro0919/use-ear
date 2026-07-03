@@ -7,10 +7,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      vosk-browser:
-        specifier: ^0.0.8
-        version: 0.0.8
     devDependencies:
       '@biomejs/biome':
         specifier: 2.5.1
@@ -69,6 +65,9 @@ importers:
       vitest:
         specifier: ^4.1.9
         version: 4.1.9(@types/node@20.19.43)(jsdom@29.1.1)(vite@8.1.0(@types/node@20.19.43)(esbuild@0.27.7)(jiti@2.7.0))
+      vosk-browser:
+        specifier: ^0.0.8
+        version: 0.0.8
 
 packages:
 
