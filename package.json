@@ -1,6 +1,6 @@
 {
   "name": "use-ear",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "React hooks for wake word detection using Web Speech API",
   "type": "module",
   "sideEffects": false,
@@ -23,7 +23,11 @@
     "speech-recognition",
     "wake-word",
     "voice",
-    "web-speech-api"
+    "web-speech-api",
+    "vosk",
+    "on-device",
+    "offline",
+    "stt"
   ],
   "license": "MIT",
   "repository": {

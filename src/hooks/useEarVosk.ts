@@ -120,6 +120,12 @@ export interface VoskMetrics {
 export interface UseEarVoskReturn {
   status: VoskStatus;
   isListening: boolean;
+  /**
+   * この環境で on-device STT が動作可能か (AudioContext + getUserMedia +
+   * WebAssembly の有無で判定)。SSR 中は false、マウント後に確定する。
+   * UI の出し分け (対応端末だけボタンを見せる等) に使う。
+   */
+  isSupported: boolean;
   /** モデルロードの進捗 (0〜1)。取得できない場合は null */
   loadProgress: number | null;
   /** モデルを事前ロードする (start 前に裏で呼ぶと初期化待ちを隠せる) */
@@ -153,6 +159,19 @@ export const DEFAULT_MODELS: Record<string, string> = {
   "de-DE": `${R2_MODELS_BASE}/vosk-model-small-de-0.15.tar.gz`,
 };
 
+// on-device STT が動作可能な環境か (静的な能力判定。モデル URL の到達性は含まない)。
+const detectVoskSupport = (): boolean => {
+  if (typeof window === "undefined") return false;
+  const w = window as unknown as { webkitAudioContext?: unknown };
+  const hasAudio =
+    typeof AudioContext !== "undefined" ||
+    typeof w.webkitAudioContext !== "undefined";
+  const hasMic =
+    typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
+  const hasWasm = typeof WebAssembly !== "undefined";
+  return hasAudio && hasMic && hasWasm;
+};
+
 interface PerfMemory {
   usedJSHeapSize: number;
 }
@@ -183,6 +202,9 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
   const [transcript, setTranscript] = useState("");
   const [partial, setPartial] = useState("");
   const [loadProgress, setLoadProgress] = useState<number | null>(null);
+  // マウント後に環境の対応可否を確定 (SSR では false のまま → ハイドレーション不一致なし)
+  const [isSupported, setIsSupported] = useState(false);
+  useEffect(() => setIsSupported(detectVoskSupport()), []);
   const [metrics, setMetrics] = useState<VoskMetrics>({
     modelLoadMs: null,
     modelBytes: null,
@@ -629,6 +651,7 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
   return {
     status,
     isListening: status === "listening",
+    isSupported,
     loadProgress,
     preload,
     start,

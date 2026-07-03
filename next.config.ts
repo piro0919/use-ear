@@ -3,21 +3,10 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   reactCompiler: true,
   serverExternalPackages: ["esbuild-wasm"],
-  // Vosk モデルはファイル名でバージョン管理されている不変アセットなので、
-  // 長期 immutable キャッシュにして再訪問時の再検証(304往復)すら無くす。
-  async headers() {
-    return [
-      {
-        source: "/models/:path*",
-        headers: [
-          {
-            key: "Cache-Control",
-            value: "public, max-age=31536000, immutable",
-          },
-        ],
-      },
-    ];
-  },
+  // NOTE: Vosk モデルは Cloudflare R2 (models.use-ear.kkweb.io) から配信し、
+  // 長期 immutable キャッシュは R2 側の Cloudflare ルールで付与している。
+  // かつてここにあった /models/* の Cache-Control ヘッダは同一オリジン配信を
+  // やめたため不要になり削除した。
 };
 
 export default nextConfig;
