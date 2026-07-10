@@ -60,7 +60,7 @@
     }
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.2",
+    "@biomejs/biome": "2.5.3",
     "@serwist/turbopack": "^9.5.11",
     "@tailwindcss/postcss": "^4.3.2",
     "@testing-library/react": "^16.3.2",
@@ -78,7 +78,7 @@
     "tailwindcss": "^4.3.2",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.9",
+    "vitest": "^4.1.10",
     "vosk-browser": "^0.0.8"
   }
 }
