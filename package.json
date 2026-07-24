@@ -51,7 +51,7 @@
     "format": "biome format --write"
   },
   "peerDependencies": {
-    "react": ">=19.2.7",
+    "react": ">=19.2.8",
     "vosk-browser": ">=0.0.8"
   },
   "peerDependenciesMeta": {
