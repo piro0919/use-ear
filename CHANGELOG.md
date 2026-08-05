@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.0
+
+### Added
+
+- **`keepAudioSeconds` / `getRecentAudio()`** — keep the last few seconds of audio
+  and read them back after a wake word fires. The detection already happened
+  inside the hook, so callers had no way to get at the voice that triggered it;
+  this hands it over as 16 kHz mono float32, ready for speaker verification or
+  anything else that needs the audio rather than the transcript. Off by default
+  (`0`), and the ring buffer is discarded on `stop()`. One second costs about
+  64 KB.
+
 ## 1.1.2
 
 ### Fixed

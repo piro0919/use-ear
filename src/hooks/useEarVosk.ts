@@ -46,6 +46,15 @@ interface VoskModel {
 type CreateModel = (modelUrl: string, logLevel?: number) => Promise<VoskModel>;
 
 export interface UseEarVoskOptions {
+  /**
+   * 直近の音声を保持する秒数 (0 なら保持しない、既定 0)。
+   *
+   * ウェイクワードを検出した「その声」を後から取り出したい用途 (話者照合など) の
+   * ための輪バッファ。検出は Vosk が済ませているので、呼び出し側は検出後に
+   * getRecentAudio() を呼べば直前の発話をそのまま得られる。
+   * 16 kHz mono float32 で保持するので、1 秒あたり 64 KB 程度。
+   */
+  keepAudioSeconds?: number;
   /** 検出するウェイクワード (語ごとに language を持つ) */
   wakeWords: WakeWordInput[];
   /** ウェイクワード検出時のコールバック */
@@ -137,6 +146,11 @@ export interface UseEarVoskReturn {
   transcript: string;
   /** 現在の途中経過テキスト (どれかの言語) */
   partial: string;
+  /**
+   * 直近 `seconds` 秒の音声を 16 kHz mono float32 で返す。
+   * keepAudioSeconds が 0 (既定) のとき、または待ち受けていないときは null。
+   */
+  getRecentAudio: (seconds?: number) => Float32Array | null;
   metrics: VoskMetrics;
 }
 
@@ -217,6 +231,7 @@ const terminateSharedModels = (): void => {
 
 export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
   const {
+    keepAudioSeconds = 0,
     wakeWords,
     onWakeWord,
     stopWords = [],
@@ -288,6 +303,15 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
   const modelsRef = useRef(sharedModels);
   const modelPromisesRef = useRef(sharedModelPromises);
   const recognizersRef = useRef<ActiveRecognizer[]>([]);
+  // 直近の音声を貯める輪バッファ (16 kHz mono float32)。keepAudioSeconds が 0 なら作らない。
+  const audioRingRef = useRef<{
+    buffer: Float32Array;
+    rate: number;
+    filled: boolean;
+    write: number;
+  } | null>(null);
+  const keepAudioSecondsRef = useRef(keepAudioSeconds);
+  keepAudioSecondsRef.current = keepAudioSeconds;
   // 起動処理が走っている間だけ true。多重起動のガードに state (status) を使うと、
   // 再レンダリング前の呼び出しが古い status を握ったまま素通りし、マイクと音声グラフが
   // 人数分できてしまう。同じ音声が多重に認識器へ流れ込み、認識が引き伸ばされて壊れる。
@@ -391,6 +415,7 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
       }
     }
     recognizersRef.current = [];
+    audioRingRef.current = null;
     if (mediaStreamRef.current) {
       for (const track of mediaStreamRef.current.getTracks()) track.stop();
       mediaStreamRef.current = null;
@@ -591,8 +616,35 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
       // 回すのは recognizersRef ではなく、この起動で作った active。
       // ref を読み直すと、取り残されたノードが「今の認識器」へ音声を重ねて流し込み、
       // 同じ音が多重に入って認識が引き伸ばされる。
+      // 直近の音声を保持する (話者照合など、検出した「その声」を後から使う用途)。
+      if (keepAudioSecondsRef.current > 0) {
+        const rate = audioContext.sampleRate;
+        audioRingRef.current = {
+          buffer: new Float32Array(
+            Math.ceil(rate * keepAudioSecondsRef.current),
+          ),
+          filled: false,
+          rate,
+          write: 0,
+        };
+      } else {
+        audioRingRef.current = null;
+      }
+
       processor.onaudioprocess = (event) => {
         const t0 = performance.now();
+        const ring = audioRingRef.current;
+        if (ring) {
+          const input = event.inputBuffer.getChannelData(0);
+          for (let i = 0; i < input.length; i++) {
+            ring.buffer[ring.write] = input[i];
+            ring.write += 1;
+            if (ring.write >= ring.buffer.length) {
+              ring.write = 0;
+              ring.filled = true;
+            }
+          }
+        }
         for (const { recognizer } of active) {
           try {
             recognizer.acceptWaveform(event.inputBuffer);
@@ -741,8 +793,44 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
     };
   }, [stop]);
 
+  // 直近 seconds 秒を 16 kHz mono float32 で返す。輪バッファは AudioContext の
+  // サンプルレート (多くは 48 kHz) で溜まっているので、話者照合が期待する
+  // 16 kHz へ間引いてから渡す。
+  const getRecentAudio = useCallback(
+    (seconds = keepAudioSecondsRef.current): Float32Array | null => {
+      const ring = audioRingRef.current;
+      if (!ring || seconds <= 0) return null;
+      const available = ring.filled ? ring.buffer.length : ring.write;
+      const want = Math.min(available, Math.ceil(ring.rate * seconds));
+      if (want <= 0) return null;
+      // 新しいほうから want サンプル分を時系列順に取り出す
+      const src = new Float32Array(want);
+      const start =
+        (ring.write - want + ring.buffer.length) % ring.buffer.length;
+      for (let i = 0; i < want; i++) {
+        src[i] = ring.buffer[(start + i) % ring.buffer.length];
+      }
+      const target = 16_000;
+      if (ring.rate === target) return src;
+      const ratio = ring.rate / target;
+      const out = new Float32Array(Math.floor(want / ratio));
+      for (let i = 0; i < out.length; i++) {
+        // 線形補間。話者照合の特徴量は 25 ms 窓なので、この程度で足りる。
+        const pos = i * ratio;
+        const idx = Math.floor(pos);
+        const frac = pos - idx;
+        const a = src[idx] ?? 0;
+        const b = src[idx + 1] ?? a;
+        out[i] = a + (b - a) * frac;
+      }
+      return out;
+    },
+    [],
+  );
+
   return {
     status,
+    getRecentAudio,
     isListening: status === "listening",
     isSupported,
     loadProgress,
