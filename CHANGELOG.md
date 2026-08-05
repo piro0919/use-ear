@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.2
+
+### Fixed
+
+- **Reverted the single-download change from 1.1.1 — it broke model loading.**
+  Handing the fetched bytes to `createModel` as a blob URL meant the archive
+  arrived decompressed, and extraction failed with "Unrecognized archive
+  format", leaving the hook without a model. The archive URL is passed through
+  again, so the model is fetched twice on first load (once for progress, once
+  by `createModel`) as it was before 1.1.1. Everything else in 1.1.1 stands.
+
 ## 1.1.1
 
 ### Fixed

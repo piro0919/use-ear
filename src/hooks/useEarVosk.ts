@@ -432,49 +432,29 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
         let p = modelPromisesRef.current.get(lang);
         if (!p) {
           p = (async () => {
-            // 進捗を出すために自分で取得し、その中身をそのまま createModel へ渡す。
-            // 取得したものを捨てて createModel に取り直させると、モデル (数十MB) を
-            // 二度落とすことになる。回線の細い場所では待ち時間がそのまま倍になる。
-            let objectUrl: string | null = null;
+            // 進捗のために本体を読み切るが、渡すのは URL のままにする。取得した中身を
+            // Blob にして渡すとダウンロードは1回で済むが、その経路では圧縮が解かれた
+            // 状態になり vosk 側の展開が "Unrecognized archive format" で失敗する。
             try {
               const res = await fetch(url);
               const total = Number(res.headers.get("content-length")) || 0;
               totals[lang] = total;
-              if (res.body) {
+              if (res.body && total > 0) {
                 const reader = res.body.getReader();
-                const chunks: Uint8Array[] = [];
                 received[lang] = 0;
                 for (;;) {
                   const { done, value } = await reader.read();
                   if (done) break;
-                  if (value) {
-                    chunks.push(value);
-                    received[lang] += value.length;
-                    if (total > 0) updateProgress();
-                  }
+                  received[lang] += value?.length ?? 0;
+                  updateProgress();
                 }
-                objectUrl = URL.createObjectURL(
-                  new Blob(chunks as BlobPart[], {
-                    type: res.headers.get("content-type") ?? "application/gzip",
-                  }),
-                );
               }
             } catch {
-              // 取得に失敗しても createModel が自分で取りに行くので続行する
+              // 進捗取得に失敗しても createModel が自分で取りに行くので続行する
             }
-            try {
-              const model = await createModel(objectUrl ?? url);
-              modelsRef.current.set(lang, model);
-              return model;
-            } catch (e) {
-              // Blob 経由で読めない環境では元の URL で取り直す
-              if (objectUrl == null) throw e;
-              const model = await createModel(url);
-              modelsRef.current.set(lang, model);
-              return model;
-            } finally {
-              if (objectUrl != null) URL.revokeObjectURL(objectUrl);
-            }
+            const model = await createModel(url);
+            modelsRef.current.set(lang, model);
+            return model;
           })();
           modelPromisesRef.current.set(lang, p);
         }
