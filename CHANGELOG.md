@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.1.1
+
+### Fixed
+
+- **`useEarVosk` could run several listening sessions at once, wrecking
+  recognition.** `start()` guarded against re-entry with the `status` state, so
+  calls made before React re-rendered all saw `idle` and went through. Each one
+  took its own microphone and audio graph, and because the processor read the
+  recognizer list through a ref, every graph fed the *current* recognizer. The
+  same audio arrived two to five times over, so speech decoded as a much longer
+  utterance: a Japanese wake word came back as unrelated words. The guard is now
+  a ref, and each audio graph only feeds the recognizers it created.
+- **A `stop()` during startup left the hook wedged.** `start()` awaits the model
+  load and the microphone, and a tab moved to the background never resolves
+  `getUserMedia`. The pending start held the guard forever and every later
+  `start()` was refused. Startup now carries a generation number: `stop()`
+  advances it, and an interrupted start releases the microphone and audio
+  context it opened, then bows out.
+
+### Changed
+
+- **The model is downloaded once instead of twice.** Progress reporting fetched
+  the archive, threw the bytes away, and let `createModel` fetch it again — tens
+  of megabytes twice over, which doubles the wait on a weak connection. The
+  fetched bytes are now handed straight to `createModel`.
+- **Models and load progress are shared across hook instances.** They used to be
+  per-instance, so a route change that remounted the listener re-downloaded and
+  re-extracted the model, and a second instance showed no progress for a
+  download already running. Both now live at module scope; models are released
+  60 seconds after the last consumer unmounts, since a navigation unmounts
+  before it mounts again. Models are keyed by language, so consumers on one page
+  should use the same model URL per language.
+
 ## 1.1.0
 
 ### Added

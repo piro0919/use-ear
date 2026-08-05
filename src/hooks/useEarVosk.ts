@@ -181,6 +181,40 @@ interface ActiveRecognizer {
   recognizer: VoskRecognizer;
 }
 
+// 読み込んだモデルはモジュール単位で共有する。フックの利用側ごとに持つと、画面遷移で
+// 待ち受けが立ち上がり直すたびに数十MBを落とし直し、展開もやり直すことになる。ページに
+// 2つ目の利用側が現れても、既に読み込んであるものをそのまま使う。
+const sharedModels = new Map<string, VoskModel>();
+const sharedModelPromises = new Map<string, Promise<VoskModel>>();
+// 生きている利用側の数。0 になってもすぐには捨てない。画面遷移では「外れてから
+// 立ち上がる」順になるため、その瞬間に捨てると結局落とし直しになる。
+let consumerCount = 0;
+let releaseTimer: ReturnType<typeof setTimeout> | null = null;
+// 利用側が居なくなってからモデルを破棄するまでの猶予。
+const MODEL_RELEASE_DELAY_MS = 60_000;
+
+// 進捗もモデルと同じく共有する。実際にモデルを落としているのは最初に立ち上がった
+// 利用側だけで、後から立ち上がった側は同じ取得を待っているだけになる。値を利用側ごとの
+// state に閉じ込めると、待っている側の画面には進捗が出ない。
+let sharedLoadProgress: number | null = null;
+const progressSubscribers = new Set<(progress: number | null) => void>();
+const publishLoadProgress = (progress: number | null): void => {
+  sharedLoadProgress = progress;
+  for (const notify of progressSubscribers) notify(progress);
+};
+
+const terminateSharedModels = (): void => {
+  for (const model of sharedModels.values()) {
+    try {
+      model.terminate();
+    } catch {
+      // 既に破棄済みなら無視
+    }
+  }
+  sharedModels.clear();
+  sharedModelPromises.clear();
+};
+
 export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
   const {
     wakeWords,
@@ -201,7 +235,9 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
   const [error, setError] = useState<Error | null>(null);
   const [transcript, setTranscript] = useState("");
   const [partial, setPartial] = useState("");
-  const [loadProgress, setLoadProgress] = useState<number | null>(null);
+  const [loadProgress, setLoadProgress] = useState<number | null>(
+    sharedLoadProgress,
+  );
   // マウント後に環境の対応可否を確定 (SSR では false のまま → ハイドレーション不一致なし)
   const [isSupported, setIsSupported] = useState(false);
   useEffect(() => setIsSupported(detectVoskSupport()), []);
@@ -248,9 +284,17 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
   });
 
   // リソース ref。モデルは言語ごとに保持し、start/stop 間で使い回す。
-  const modelsRef = useRef<Map<string, VoskModel>>(new Map());
-  const modelPromisesRef = useRef<Map<string, Promise<VoskModel>>>(new Map());
+  // モデルは共有。ref は「その利用側から見た入口」でしかない。
+  const modelsRef = useRef(sharedModels);
+  const modelPromisesRef = useRef(sharedModelPromises);
   const recognizersRef = useRef<ActiveRecognizer[]>([]);
+  // 起動処理が走っている間だけ true。多重起動のガードに state (status) を使うと、
+  // 再レンダリング前の呼び出しが古い status を握ったまま素通りし、マイクと音声グラフが
+  // 人数分できてしまう。同じ音声が多重に認識器へ流れ込み、認識が引き伸ばされて壊れる。
+  const startingRef = useRef(false);
+  // 起動の世代。stop() で進める。await の後に世代が変わっていたら、その起動は
+  // 割り込まれたものとして自分が作った資源だけ片付けて撤退する。
+  const runIdRef = useRef(0);
   const audioContextRef = useRef<AudioContext | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -314,6 +358,10 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
   }, []);
 
   const stop = useCallback(() => {
+    // 進行中の起動を無効化する。await の途中では資源がまだ生まれていないため、
+    // ここで片付けることはできない。世代を進めて、起動側に撤退させる。
+    runIdRef.current += 1;
+    startingRef.current = false;
     if (rafRef.current != null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
@@ -363,7 +411,7 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
     if (missing.length === 0) return;
 
     setStatus("loading-model");
-    setLoadProgress(null);
+    publishLoadProgress(null);
     const loadStart = performance.now();
 
     const received: Record<string, number> = {};
@@ -371,7 +419,7 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
     const updateProgress = () => {
       const t = Object.values(totals).reduce((a, b) => a + b, 0);
       const r = Object.values(received).reduce((a, b) => a + b, 0);
-      if (t > 0) setLoadProgress(Math.min(1, r / t));
+      if (t > 0) publishLoadProgress(Math.min(1, r / t));
     };
 
     const { createModel } = (await import("vosk-browser")) as unknown as {
@@ -384,26 +432,49 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
         let p = modelPromisesRef.current.get(lang);
         if (!p) {
           p = (async () => {
+            // 進捗を出すために自分で取得し、その中身をそのまま createModel へ渡す。
+            // 取得したものを捨てて createModel に取り直させると、モデル (数十MB) を
+            // 二度落とすことになる。回線の細い場所では待ち時間がそのまま倍になる。
+            let objectUrl: string | null = null;
             try {
               const res = await fetch(url);
               const total = Number(res.headers.get("content-length")) || 0;
               totals[lang] = total;
-              if (res.body && total > 0) {
+              if (res.body) {
                 const reader = res.body.getReader();
+                const chunks: Uint8Array[] = [];
                 received[lang] = 0;
                 for (;;) {
                   const { done, value } = await reader.read();
                   if (done) break;
-                  received[lang] += value?.length ?? 0;
-                  updateProgress();
+                  if (value) {
+                    chunks.push(value);
+                    received[lang] += value.length;
+                    if (total > 0) updateProgress();
+                  }
                 }
+                objectUrl = URL.createObjectURL(
+                  new Blob(chunks as BlobPart[], {
+                    type: res.headers.get("content-type") ?? "application/gzip",
+                  }),
+                );
               }
             } catch {
-              // 進捗取得失敗は createModel が再取得するので続行
+              // 取得に失敗しても createModel が自分で取りに行くので続行する
             }
-            const model = await createModel(url);
-            modelsRef.current.set(lang, model);
-            return model;
+            try {
+              const model = await createModel(objectUrl ?? url);
+              modelsRef.current.set(lang, model);
+              return model;
+            } catch (e) {
+              // Blob 経由で読めない環境では元の URL で取り直す
+              if (objectUrl == null) throw e;
+              const model = await createModel(url);
+              modelsRef.current.set(lang, model);
+              return model;
+            } finally {
+              if (objectUrl != null) URL.revokeObjectURL(objectUrl);
+            }
           })();
           modelPromisesRef.current.set(lang, p);
         }
@@ -423,22 +494,24 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
       modelBytes: totalBytes,
       modelCount: modelsRef.current.size,
     }));
-    setLoadProgress(1);
+    publishLoadProgress(1);
   }, []);
 
   const start = useCallback(async () => {
-    if (
-      status === "listening" ||
-      status === "loading-model" ||
-      status === "requesting-mic"
-    )
-      return;
+    // ガードは state ではなく ref で行う。state は再レンダリングまで古い値のままで、
+    // 同じ瞬間に重なった呼び出しを弾けない。
+    if (startingRef.current || recognizersRef.current.length > 0) return;
+    startingRef.current = true;
+    const runId = ++runIdRef.current;
+    // この起動が割り込まれたか。割り込まれていたら自分の資源だけ片付けて撤退する。
+    const abandoned = (): boolean => runId !== runIdRef.current;
     setError(null);
     firedByLangRef.current.clear();
 
     try {
       // 1) 全モデルを用意 (初回のみロード)
       await ensureModels();
+      if (abandoned()) return;
 
       // 2) マイク取得
       setStatus("requesting-mic");
@@ -451,12 +524,26 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
           sampleRate: 16000,
         },
       });
+      // ここから先は資源を掴んでいる。撤退するなら自分で解放する。
+      if (abandoned()) {
+        for (const track of mediaStream.getTracks()) track.stop();
+        return;
+      }
       mediaStreamRef.current = mediaStream;
 
       const audioContext = new AudioContext();
       audioContextRef.current = audioContext;
       if (audioContext.state === "suspended") {
         await audioContext.resume();
+      }
+      if (abandoned()) {
+        for (const track of mediaStream.getTracks()) track.stop();
+        audioContext.close().catch(() => {});
+        if (mediaStreamRef.current === mediaStream)
+          mediaStreamRef.current = null;
+        if (audioContextRef.current === audioContext)
+          audioContextRef.current = null;
+        return;
       }
 
       // 3) 言語ごとに recognizer を作成 (grammar はその言語の語で)
@@ -521,9 +608,12 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
       silentGain.gain.value = 0;
       silentGainRef.current = silentGain;
 
+      // 回すのは recognizersRef ではなく、この起動で作った active。
+      // ref を読み直すと、取り残されたノードが「今の認識器」へ音声を重ねて流し込み、
+      // 同じ音が多重に入って認識が引き伸ばされる。
       processor.onaudioprocess = (event) => {
         const t0 = performance.now();
-        for (const { recognizer } of recognizersRef.current) {
+        for (const { recognizer } of active) {
           try {
             recognizer.acceptWaveform(event.inputBuffer);
           } catch (e) {
@@ -587,14 +677,20 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
         }));
       }, 1000);
 
-      setLoadProgress(1);
+      publishLoadProgress(1);
       setStatus("listening");
     } catch (e) {
+      // 割り込まれた後の失敗は、次の起動が面倒を見るのでここでは触らない。
+      if (abandoned()) return;
       setError(e instanceof Error ? e : new Error("Failed to start vosk"));
       setStatus("error");
       stop();
+    } finally {
+      // 自分が最後の起動である間だけ在庫フラグを下ろす。割り込まれている場合は
+      // 新しい起動が握っているので触らない。
+      if (!abandoned()) startingRef.current = false;
     }
-  }, [status, ensureModels, runMatch, stop]);
+  }, [ensureModels, runMatch, stop]);
 
   // モデルの事前ロード
   const preload = useCallback(async () => {
@@ -613,6 +709,8 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
   // (ページ側はリッスン中の言語切り替えを禁止しているので通常は idle 時のみ発火)
   // biome-ignore lint/correctness/useExhaustiveDependencies: 意図的に modelsKey のみで発火
   useEffect(() => {
+    // モデルは共有しているので、他の利用側が居る間は解放しない。
+    if (consumerCount > 1) return;
     const wanted = new Set(Object.keys(modelsMapRef.current));
     const activeLangs = new Set(recognizersRef.current.map((r) => r.language));
     let released = false;
@@ -632,19 +730,34 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
     }
   }, [modelsKey]);
 
-  // アンマウント時のクリーンアップ: 音声リソースを止め、全モデルを破棄する
+  // アンマウント時のクリーンアップ: 音声リソースだけ止める。モデルは共有なので、
+  // 最後の利用側が居なくなってから猶予をおいて破棄する。画面遷移では新しい待ち受けが
+  // すぐ立ち上がるため、その場で捨てると落とし直しになる。
+  // 共有している進捗を購読する。落としている側でなくても現在値が届く。
   useEffect(() => {
+    progressSubscribers.add(setLoadProgress);
+    setLoadProgress(sharedLoadProgress);
+    return () => {
+      progressSubscribers.delete(setLoadProgress);
+    };
+  }, []);
+
+  useEffect(() => {
+    consumerCount += 1;
+    if (releaseTimer != null) {
+      clearTimeout(releaseTimer);
+      releaseTimer = null;
+    }
     return () => {
       stop();
-      modelPromisesRef.current.clear();
-      for (const model of modelsRef.current.values()) {
-        try {
-          model.terminate();
-        } catch {
-          // 既に破棄済みなら無視
-        }
-      }
-      modelsRef.current.clear();
+      consumerCount -= 1;
+      if (consumerCount > 0) return;
+      if (releaseTimer != null) clearTimeout(releaseTimer);
+      releaseTimer = setTimeout(() => {
+        releaseTimer = null;
+        if (consumerCount > 0) return;
+        terminateSharedModels();
+      }, MODEL_RELEASE_DELAY_MS);
     };
   }, [stop]);
 
