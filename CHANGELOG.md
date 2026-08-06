@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.3.0
+
+### Added
+
+- **`audioSource: "external"` / `pushAudio()` / `flush()`** — let the caller own
+  the microphone. Until now `start()` opened the device and `stop()` closed it,
+  so an app that also needs the same microphone for something else had to reopen
+  it on every stop/start. On mobile that costs hundreds of milliseconds to
+  seconds, and the speech in that gap is lost outright: once the first couple of
+  characters are missing, fuzzy matching drops below threshold and the wake word
+  does not fire at all. With `audioSource: "external"` the hook never touches
+  the microphone — you keep one stream open and feed frames in with
+  `pushAudio(samples, sampleRate)`. Recognizers are built from the first frame's
+  sample rate and rebuilt if it changes. `flush()` cuts an utterance boundary
+  for callers that pause and resume the feed; the text it flushes is
+  deliberately not matched, since it is the tail of what was said before the
+  pause and matching it would fire the same wake word a second time the moment
+  feeding resumes. The default (`"microphone"`) is unchanged.
+
 ## 1.2.0
 
 ### Added
