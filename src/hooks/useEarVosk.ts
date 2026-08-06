@@ -37,6 +37,8 @@ interface VoskRecognizer {
   on(event: "partialresult", cb: (m: VoskPartialMessage) => void): void;
   on(event: "error", cb: (m: { error: string }) => void): void;
   acceptWaveform(buffer: AudioBuffer): void;
+  acceptWaveformFloat(buffer: Float32Array, sampleRate: number): void;
+  retrieveFinalResult(): void;
   remove(): void;
 }
 interface VoskModel {
@@ -89,14 +91,22 @@ export interface UseEarVoskOptions {
     text: string,
     info: { isFinal: boolean; language: string },
   ) => void;
+  /**
+   * 音声をどこから受け取るか (既定 "microphone")。
+   *
+   * - "microphone": start() が getUserMedia と AudioContext を自前で用意する
+   * - "external":   マイクを一切触らず、pushAudio() で渡されたフレームだけを照合する
+   *
+   * "external" は、同じマイクを別の用途 (通話・クラウドの文字起こし等) と同時に使う
+   * アプリのためにある。マイクを持つのは呼び出し側1箇所だけになり、待ち受けの
+   * 停止・再開でデバイスを開き直さずに済む。開き直しは端末によっては秒単位かかり、
+   * その間の発話は丸ごと失われる。
+   */
+  audioSource?: "microphone" | "external";
 }
 
 export type VoskStatus =
-  | "idle"
-  | "loading-model"
-  | "requesting-mic"
-  | "listening"
-  | "error";
+  "idle" | "loading-model" | "requesting-mic" | "listening" | "error";
 
 export interface VoskMetrics {
   /** 全モデルのロード + 初期化にかかった時間 (ms) */
@@ -152,6 +162,22 @@ export interface UseEarVoskReturn {
    */
   getRecentAudio: (seconds?: number) => Float32Array | null;
   metrics: VoskMetrics;
+  /**
+   * audioSource: "external" のとき、音声フレームを流し込む。
+   * それ以外のときは何もしない (マイク側の音声と混ざらないようにするため)。
+   *
+   * samples は 1ch の float32 (-1〜1)。認識器は最初のフレームの sampleRate で作られ、
+   * 途中でレートが変わったら作り直す。start() より前や stop() の後に呼んだぶんは捨てる。
+   */
+  pushAudio: (samples: Float32Array, sampleRate: number) => void;
+  /**
+   * 認識器が抱えている途中経過を捨てて発話の区切りを入れる。
+   *
+   * 音声の供給を一時的に止めて再開するとき、止める前の発話の続きとして認識されるのを
+   * 防ぐために使う。この区切りで出てくる確定テキストは照合にかけない。かけると、
+   * 止める前に言ったウェイクワードが再開の瞬間にもう一度発火する。
+   */
+  flush: () => void;
 }
 
 // 既定のモデル配信元 (Cloudflare R2 のカスタムドメイン, CDN 前段 / egress 無料 /
@@ -206,6 +232,8 @@ let consumerCount = 0;
 let releaseTimer: ReturnType<typeof setTimeout> | null = null;
 // 利用側が居なくなってからモデルを破棄するまでの猶予。
 const MODEL_RELEASE_DELAY_MS = 60_000;
+// flush() の区切りの結果を待つ上限。これを過ぎたら印を捨てる。
+const FLUSH_SUPPRESS_TIMEOUT_MS = 1_000;
 
 // 進捗もモデルと同じく共有する。実際にモデルを落としているのは最初に立ち上がった
 // 利用側だけで、後から立ち上がった側は同じ取得を待っているだけになる。値を利用側ごとの
@@ -244,6 +272,7 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
     similarityThreshold,
     useGrammar = false,
     onTranscript,
+    audioSource = "microphone",
   } = options;
 
   const [status, setStatus] = useState<VoskStatus>("idle");
@@ -326,6 +355,17 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
   const uptimeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const audioSourceRef = useRef(audioSource);
+  audioSourceRef.current = audioSource;
+  // 外部供給のとき、いま認識器を組んであるサンプルレート。フレームのレートが
+  // これと違ったら組み直す。
+  const externalRateRef = useRef<number | null>(null);
+  // pushAudio は再レンダリングを待てないので、待ち受け中かどうかを ref でも持つ。
+  const listeningRef = useRef(false);
+  // flush() で出てくる確定テキストを照合にかけないための印。認識器は言語ごとに
+  // 別々に区切りの結果を返すので、言語単位で持つ。
+  const flushingLangsRef = useRef<Set<string>>(new Set());
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 発話ごとの発火済み管理を言語別に持つ (1発話につき各語1回)
   const firedByLangRef = useRef<Map<string, Set<string>>>(new Map());
@@ -381,6 +421,70 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
     }
   }, []);
 
+  // 言語ごとに recognizer を作る (grammar はその言語の語で)。
+  // マイク版と外部供給版で共通。サンプルレートは音声の出どころから決まる。
+  const createRecognizers = useCallback(
+    (sampleRate: number): ActiveRecognizer[] => {
+      const def = languageRef.current;
+      const active: ActiveRecognizer[] = [];
+      for (const lang of Object.keys(modelsMapRef.current)) {
+        const model = modelsRef.current.get(lang);
+        if (!model) continue;
+
+        let grammar: string | undefined;
+        if (useGrammarRef.current) {
+          const phrases = [
+            ...normalizeWakeWords(wakeWordsRef.current, def),
+            ...normalizeWakeWords(stopWordsRef.current, def),
+          ]
+            .filter((w) => w.language === lang)
+            .map((w) => w.word);
+          if (phrases.length > 0) {
+            grammar = JSON.stringify([...new Set(phrases), "[unk]"]);
+          }
+        }
+
+        const recognizer = grammar
+          ? new model.KaldiRecognizer(sampleRate, grammar)
+          : new model.KaldiRecognizer(sampleRate);
+
+        recognizer.on("result", (message) => {
+          const text = message.result.text ?? "";
+          // flush() で切った区切りの確定テキストは、止める前の発話の残りでしかない。
+          // 照合にかけると、そのとき言ったウェイクワードが再開の瞬間に再発火する。
+          if (flushingLangsRef.current.delete(lang)) {
+            firedByLangRef.current.get(lang)?.clear();
+            return;
+          }
+          if (text) {
+            setTranscript(text);
+            onTranscriptRef.current?.(text, { isFinal: true, language: lang });
+            runMatch(text, lang);
+          }
+          // その言語の発話境界。発火済みをリセット
+          firedByLangRef.current.get(lang)?.clear();
+        });
+        recognizer.on("partialresult", (message) => {
+          const p = message.result.partial ?? "";
+          setPartial(p);
+          if (p) {
+            onTranscriptRef.current?.(p, { isFinal: false, language: lang });
+            runMatch(p, lang);
+          } else {
+            firedByLangRef.current.get(lang)?.clear();
+          }
+        });
+        recognizer.on("error", (message) => {
+          setError(new Error(`vosk error (${lang}): ${message.error}`));
+        });
+
+        active.push({ language: lang, recognizer });
+      }
+      return active;
+    },
+    [runMatch],
+  );
+
   const stop = useCallback(() => {
     // 進行中の起動を無効化する。await の途中では資源がまだ生まれていないため、
     // ここで片付けることはできない。世代を進めて、起動側に撤退させる。
@@ -425,6 +529,13 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
       audioContextRef.current = null;
     }
     // モデル (modelsRef) は保持し続ける。破棄はアンマウント時のみ。
+    externalRateRef.current = null;
+    flushingLangsRef.current.clear();
+    if (flushTimerRef.current != null) {
+      clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+    listeningRef.current = false;
     setStatus("idle");
     setPartial("");
   }, []);
@@ -518,6 +629,15 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
       await ensureModels();
       if (abandoned()) return;
 
+      // 外部供給のときはここで終わり。マイクも AudioContext も触らない。
+      // 認識器は、サンプルレートが分かる最初の pushAudio で作る。
+      if (audioSourceRef.current === "external") {
+        publishLoadProgress(1);
+        listeningRef.current = true;
+        setStatus("listening");
+        return;
+      }
+
       // 2) マイク取得
       setStatus("requesting-mic");
       const mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -552,55 +672,7 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
       }
 
       // 3) 言語ごとに recognizer を作成 (grammar はその言語の語で)
-      const def = languageRef.current;
-      const active: ActiveRecognizer[] = [];
-      for (const lang of Object.keys(modelsMapRef.current)) {
-        const model = modelsRef.current.get(lang);
-        if (!model) continue;
-
-        let grammar: string | undefined;
-        if (useGrammarRef.current) {
-          const phrases = [
-            ...normalizeWakeWords(wakeWordsRef.current, def),
-            ...normalizeWakeWords(stopWordsRef.current, def),
-          ]
-            .filter((w) => w.language === lang)
-            .map((w) => w.word);
-          if (phrases.length > 0) {
-            grammar = JSON.stringify([...new Set(phrases), "[unk]"]);
-          }
-        }
-
-        const recognizer = grammar
-          ? new model.KaldiRecognizer(audioContext.sampleRate, grammar)
-          : new model.KaldiRecognizer(audioContext.sampleRate);
-
-        recognizer.on("result", (message) => {
-          const text = message.result.text ?? "";
-          if (text) {
-            setTranscript(text);
-            onTranscriptRef.current?.(text, { isFinal: true, language: lang });
-            runMatch(text, lang);
-          }
-          // その言語の発話境界。発火済みをリセット
-          firedByLangRef.current.get(lang)?.clear();
-        });
-        recognizer.on("partialresult", (message) => {
-          const p = message.result.partial ?? "";
-          setPartial(p);
-          if (p) {
-            onTranscriptRef.current?.(p, { isFinal: false, language: lang });
-            runMatch(p, lang);
-          } else {
-            firedByLangRef.current.get(lang)?.clear();
-          }
-        });
-        recognizer.on("error", (message) => {
-          setError(new Error(`vosk error (${lang}): ${message.error}`));
-        });
-
-        active.push({ language: lang, recognizer });
-      }
+      const active = createRecognizers(audioContext.sampleRate);
       recognizersRef.current = active;
 
       // 4) 音声グラフ: mic -> scriptProcessor -> (silent gain) -> destination
@@ -710,6 +782,7 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
       }, 1000);
 
       publishLoadProgress(1);
+      listeningRef.current = true;
       setStatus("listening");
     } catch (e) {
       // 割り込まれた後の失敗は、次の起動が面倒を見るのでここでは触らない。
@@ -722,7 +795,103 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
       // 新しい起動が握っているので触らない。
       if (!abandoned()) startingRef.current = false;
     }
-  }, [ensureModels, runMatch, stop]);
+  }, [createRecognizers, ensureModels, stop]);
+
+  // 外部から音声フレームを受け取る (audioSource: "external" のときだけ働く)。
+  const pushAudio = useCallback(
+    (samples: Float32Array, sampleRate: number) => {
+      if (audioSourceRef.current !== "external") return;
+      // start() 前・stop() 後のフレームは捨てる。待ち受けていない間の音声を
+      // 認識器に溜めると、再開の瞬間に古い発話が出てくる。
+      if (!listeningRef.current) return;
+      if (!(sampleRate > 0) || samples.length === 0) return;
+
+      // 認識器はサンプルレートが分かって初めて作れる。レートが変わったら作り直す。
+      if (
+        recognizersRef.current.length === 0 ||
+        externalRateRef.current !== sampleRate
+      ) {
+        for (const { recognizer } of recognizersRef.current) {
+          try {
+            recognizer.remove();
+          } catch {
+            // すでに解放済みなら無視
+          }
+        }
+        recognizersRef.current = createRecognizers(sampleRate);
+        externalRateRef.current = sampleRate;
+        if (keepAudioSecondsRef.current > 0) {
+          audioRingRef.current = {
+            buffer: new Float32Array(
+              Math.ceil(sampleRate * keepAudioSecondsRef.current),
+            ),
+            filled: false,
+            rate: sampleRate,
+            write: 0,
+          };
+        } else {
+          audioRingRef.current = null;
+        }
+        const now = performance.now();
+        perfRef.current = {
+          startedAt: now,
+          frameLast: now,
+          frameSum: 0,
+          frameCount: 0,
+          frameMax: 0,
+          chunkSum: 0,
+          chunkCount: 0,
+        };
+      }
+
+      const t0 = performance.now();
+      const ring = audioRingRef.current;
+      if (ring) {
+        for (let i = 0; i < samples.length; i++) {
+          ring.buffer[ring.write] = samples[i];
+          ring.write += 1;
+          if (ring.write >= ring.buffer.length) {
+            ring.write = 0;
+            ring.filled = true;
+          }
+        }
+      }
+      for (const { recognizer } of recognizersRef.current) {
+        try {
+          // vosk 側が渡された配列を写してから転送するので、同じ配列を複数の
+          // 認識器へ渡してよい (呼び出し側の配列は書き換わらない)。
+          recognizer.acceptWaveformFloat(samples, sampleRate);
+        } catch (e) {
+          console.error("acceptWaveformFloat failed", e);
+        }
+      }
+      const p = perfRef.current;
+      p.chunkSum += performance.now() - t0;
+      p.chunkCount += 1;
+    },
+    [createRecognizers],
+  );
+
+  const flush = useCallback(() => {
+    if (recognizersRef.current.length === 0) return;
+    for (const { language, recognizer } of recognizersRef.current) {
+      flushingLangsRef.current.add(language);
+      try {
+        recognizer.retrieveFinalResult();
+      } catch {
+        // すでに解放済みなら無視
+      }
+    }
+    // 区切りの結果が返らなかった言語の印を残さない。残すと、次に本当に検出した
+    // ウェイクワードを1回ぶん飲み込む。
+    if (flushTimerRef.current != null) clearTimeout(flushTimerRef.current);
+    flushTimerRef.current = setTimeout(() => {
+      flushTimerRef.current = null;
+      flushingLangsRef.current.clear();
+    }, FLUSH_SUPPRESS_TIMEOUT_MS);
+    firedByLangRef.current.clear();
+    setPartial("");
+  }, []);
 
   // モデルの事前ロード
   const preload = useCallback(async () => {
@@ -841,5 +1010,7 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
     transcript,
     partial,
     metrics,
+    pushAudio,
+    flush,
   };
 }
