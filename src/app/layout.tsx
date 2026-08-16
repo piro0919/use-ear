@@ -15,6 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://use-ear.kkweb.io"),
   applicationName: "useEar",
   title: "useEar - Wake Word Detection",
   description: "React hooks for wake word detection using Web Speech API",
