@@ -39,7 +39,7 @@
   "bugs": {
     "url": "https://github.com/piro0919/use-ear/issues"
   },
-  "author": "piro0919",
+  "author": "piro0919 <piro.haniwa@gmail.com> (https://kkweb.io/)",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
