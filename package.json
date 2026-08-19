@@ -35,6 +35,7 @@
     "url": "git+https://github.com/piro0919/use-ear.git"
   },
   "homepage": "https://use-ear.kkweb.io/",
+  "funding": "https://github.com/sponsors/piro0919",
   "bugs": {
     "url": "https://github.com/piro0919/use-ear/issues"
   },
