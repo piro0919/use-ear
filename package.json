@@ -1,6 +1,6 @@
 {
   "name": "use-ear",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "React hooks for wake word detection using Web Speech API",
   "type": "module",
   "sideEffects": false,
