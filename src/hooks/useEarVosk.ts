@@ -103,10 +103,26 @@ export interface UseEarVoskOptions {
    * その間の発話は丸ごと失われる。
    */
   audioSource?: "microphone" | "external";
+  /**
+   * partial (確定前の認識結果) をこの文字数まで伸ばしたら、その言語の認識器を
+   * 作り直す (既定 40)。0 を渡すと作り直さない。
+   *
+   * Vosk は無音を検出したときにしか発話を確定しないため、周囲で人が話し続ける
+   * ような環境では partial が延々と伸びる。伸びた partial は次の発話を直前の
+   * 文脈へ引きずり、ウェイクワードが別語に化けて検出できなくなる。照合コストも
+   * partial の長さに比例して増える。
+   *
+   * ウェイクワードは長くても十数文字なので、切っても取りこぼしは起きない。
+   */
+  maxPartialChars?: number;
 }
 
 export type VoskStatus =
-  "idle" | "loading-model" | "requesting-mic" | "listening" | "error";
+  | "idle"
+  | "loading-model"
+  | "requesting-mic"
+  | "listening"
+  | "error";
 
 export interface VoskMetrics {
   /** 全モデルのロード + 初期化にかかった時間 (ms) */
@@ -273,6 +289,7 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
     useGrammar = false,
     onTranscript,
     audioSource = "microphone",
+    maxPartialChars = 40,
   } = options;
 
   const [status, setStatus] = useState<VoskStatus>("idle");
@@ -366,6 +383,16 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
   // 別々に区切りの結果を返すので、言語単位で持つ。
   const flushingLangsRef = useRef<Set<string>>(new Set());
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // partial をどこまで伸ばしたら認識器を作り直すか。
+  const maxPartialCharsRef = useRef(maxPartialChars);
+  maxPartialCharsRef.current = maxPartialChars;
+  // いま認識器を組んであるサンプルレート。作り直しに使う。
+  const sampleRateRef = useRef<number | null>(null);
+  // 作り直しの待ち中に同じ言語をもう一度積まないための印。
+  const recreatingLangsRef = useRef<Set<string>>(new Set());
+  // 作り直しの入口。認識器を組む側から呼ぶので、実体は参照で受け渡す
+  // (組む関数と作り直す関数が互いを必要とするため)。
+  const recreateRef = useRef<(language: string) => void>(() => {});
 
   // 発話ごとの発火済み管理を言語別に持つ (1発話につき各語1回)
   const firedByLangRef = useRef<Map<string, Set<string>>>(new Map());
@@ -421,69 +448,125 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
     }
   }, []);
 
-  // 言語ごとに recognizer を作る (grammar はその言語の語で)。
+  // 1言語ぶんの recognizer を組む (grammar はその言語の語で)。
+  // 起動時の作成と、待ち受けたままの作り直しの両方がここを通る。
+  const buildRecognizer = useCallback(
+    (lang: string, sampleRate: number): VoskRecognizer | null => {
+      const def = languageRef.current;
+      const model = modelsRef.current.get(lang);
+      if (!model) return null;
+
+      let grammar: string | undefined;
+      if (useGrammarRef.current) {
+        const phrases = [
+          ...normalizeWakeWords(wakeWordsRef.current, def),
+          ...normalizeWakeWords(stopWordsRef.current, def),
+        ]
+          .filter((w) => w.language === lang)
+          .map((w) => w.word);
+        if (phrases.length > 0) {
+          grammar = JSON.stringify([...new Set(phrases), "[unk]"]);
+        }
+      }
+
+      const recognizer = grammar
+        ? new model.KaldiRecognizer(sampleRate, grammar)
+        : new model.KaldiRecognizer(sampleRate);
+
+      recognizer.on("result", (message) => {
+        const text = message.result.text ?? "";
+        // flush() で切った区切りの確定テキストは、止める前の発話の残りでしかない。
+        // 照合にかけると、そのとき言ったウェイクワードが再開の瞬間に再発火する。
+        if (flushingLangsRef.current.delete(lang)) {
+          firedByLangRef.current.get(lang)?.clear();
+          return;
+        }
+        if (text) {
+          setTranscript(text);
+          onTranscriptRef.current?.(text, { isFinal: true, language: lang });
+          runMatch(text, lang);
+        }
+        // その言語の発話境界。発火済みをリセット
+        firedByLangRef.current.get(lang)?.clear();
+      });
+      recognizer.on("partialresult", (message) => {
+        const p = message.result.partial ?? "";
+        setPartial(p);
+        if (p) {
+          onTranscriptRef.current?.(p, { isFinal: false, language: lang });
+          runMatch(p, lang);
+          // 照合を済ませてから切る。伸びきった partial の末尾にウェイクワードが
+          // 乗っていることがあり、先に捨てるとその1回を落とす。
+          const limit = maxPartialCharsRef.current;
+          if (limit > 0 && p.length >= limit) recreateRef.current(lang);
+        } else {
+          firedByLangRef.current.get(lang)?.clear();
+        }
+      });
+      recognizer.on("error", (message) => {
+        setError(new Error(`vosk error (${lang}): ${message.error}`));
+      });
+
+      return recognizer;
+    },
+    [runMatch],
+  );
+
+  // 言語ごとに recognizer を作る。
   // マイク版と外部供給版で共通。サンプルレートは音声の出どころから決まる。
   const createRecognizers = useCallback(
     (sampleRate: number): ActiveRecognizer[] => {
-      const def = languageRef.current;
+      sampleRateRef.current = sampleRate;
       const active: ActiveRecognizer[] = [];
       for (const lang of Object.keys(modelsMapRef.current)) {
-        const model = modelsRef.current.get(lang);
-        if (!model) continue;
-
-        let grammar: string | undefined;
-        if (useGrammarRef.current) {
-          const phrases = [
-            ...normalizeWakeWords(wakeWordsRef.current, def),
-            ...normalizeWakeWords(stopWordsRef.current, def),
-          ]
-            .filter((w) => w.language === lang)
-            .map((w) => w.word);
-          if (phrases.length > 0) {
-            grammar = JSON.stringify([...new Set(phrases), "[unk]"]);
-          }
-        }
-
-        const recognizer = grammar
-          ? new model.KaldiRecognizer(sampleRate, grammar)
-          : new model.KaldiRecognizer(sampleRate);
-
-        recognizer.on("result", (message) => {
-          const text = message.result.text ?? "";
-          // flush() で切った区切りの確定テキストは、止める前の発話の残りでしかない。
-          // 照合にかけると、そのとき言ったウェイクワードが再開の瞬間に再発火する。
-          if (flushingLangsRef.current.delete(lang)) {
-            firedByLangRef.current.get(lang)?.clear();
-            return;
-          }
-          if (text) {
-            setTranscript(text);
-            onTranscriptRef.current?.(text, { isFinal: true, language: lang });
-            runMatch(text, lang);
-          }
-          // その言語の発話境界。発火済みをリセット
-          firedByLangRef.current.get(lang)?.clear();
-        });
-        recognizer.on("partialresult", (message) => {
-          const p = message.result.partial ?? "";
-          setPartial(p);
-          if (p) {
-            onTranscriptRef.current?.(p, { isFinal: false, language: lang });
-            runMatch(p, lang);
-          } else {
-            firedByLangRef.current.get(lang)?.clear();
-          }
-        });
-        recognizer.on("error", (message) => {
-          setError(new Error(`vosk error (${lang}): ${message.error}`));
-        });
-
+        const recognizer = buildRecognizer(lang, sampleRate);
+        if (!recognizer) continue;
         active.push({ language: lang, recognizer });
       }
       return active;
     },
-    [runMatch],
+    [buildRecognizer],
   );
+
+  // partial が伸びきった言語の認識器だけを作り直す。マイクと AudioContext は
+  // そのまま使い回すので、聞こえなくなる空白は生じない。
+  //
+  // 差し替えるのは配列の中身であって配列そのものではない。音声を流す側は起動時に
+  // 作った配列を掴んだままなので、配列ごと入れ替えると新しい認識器に音が届かない。
+  const recreateRecognizer = useCallback(
+    (lang: string) => {
+      if (recreatingLangsRef.current.has(lang)) return;
+      const rate = sampleRateRef.current;
+      if (!rate || rate <= 0) return;
+      const entry = recognizersRef.current.find((r) => r.language === lang);
+      if (!entry) return;
+      recreatingLangsRef.current.add(lang);
+      // vosk からのメッセージを処理している最中に解放しないよう、いったん抜ける。
+      setTimeout(() => {
+        recreatingLangsRef.current.delete(lang);
+        // 待っている間に stop() されていたら、その認識器はもう居ない。
+        if (!recognizersRef.current.includes(entry)) return;
+        const next = buildRecognizer(lang, rate);
+        if (!next) return;
+        const prev = entry.recognizer;
+        entry.recognizer = next;
+        try {
+          prev.remove();
+        } catch {
+          // すでに解放済みなら無視
+        }
+        // 新しい認識器は何も抱えていない。前の発話の発火済みと区切り待ちを持ち越すと、
+        // 直後のウェイクワードを1回ぶん飲み込む。
+        firedByLangRef.current.get(lang)?.clear();
+        flushingLangsRef.current.delete(lang);
+        setPartial("");
+      }, 0);
+    },
+    [buildRecognizer],
+  );
+  useEffect(() => {
+    recreateRef.current = recreateRecognizer;
+  }, [recreateRecognizer]);
 
   const stop = useCallback(() => {
     // 進行中の起動を無効化する。await の途中では資源がまだ生まれていないため、
@@ -519,6 +602,9 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
       }
     }
     recognizersRef.current = [];
+    // 待っている作り直しは、上の空配列を見て自分から降りる。印だけ戻しておく。
+    recreatingLangsRef.current.clear();
+    sampleRateRef.current = null;
     audioRingRef.current = null;
     if (mediaStreamRef.current) {
       for (const track of mediaStreamRef.current.getTracks()) track.stop();

@@ -216,6 +216,7 @@ Requires the optional peer dependency: `npm install vosk-browser`.
 | `onTranscript`        | `(text: string, info: { isFinal: boolean; language: string }) => void` | -              | Recognition update callback (includes partials)                                                                                                   |
 | `keepAudioSeconds`    | `number`                                                               | `0`            | Keep the last N seconds of audio in a ring buffer so `getRecentAudio()` can return the voice that said the wake word (speaker verification, etc.) |
 | `audioSource`         | `"microphone" \| "external"`                                           | `"microphone"` | Where audio comes from. `"external"` never touches the microphone — you feed frames in with `pushAudio()`                                         |
+| `maxPartialChars`     | `number`                                                               | `40`           | Rebuild a language's recognizer once its partial grows this long. `0` disables it. See "Noisy rooms" below                                        |
 
 Model resolution: `models` wins; otherwise the single `language` model is taken from `modelUrl` or, if omitted, from `DEFAULT_MODELS[language]` (the default CDN).
 
@@ -271,6 +272,24 @@ Recognizers are created on the first `pushAudio()` call, using that frame's samp
 rate, and rebuilt if the rate changes. Call `flush()` when you resume feeding after a
 pause, so the words spoken before the pause are not read as the start of the new
 utterance — and, importantly, are not matched as a wake word a second time.
+
+### Noisy rooms (`maxPartialChars`)
+
+Vosk only finalizes an utterance when it detects silence. Somewhere that never goes
+quiet — a TV, a radio, people talking through a shift — it never does, so the partial
+result grows without bound. Two things then go wrong: a new utterance is read as a
+continuation of everything before it and the wake word comes back as some other word,
+and matching gets slower in proportion to the partial's length (a 120-character
+partial spends roughly 463 ms of the main thread per second on matching alone).
+
+`maxPartialChars` (default `40`) rebuilds that language's recognizer once its partial
+reaches the limit. The microphone and `AudioContext` are reused, so there is no gap
+where the hook stops hearing — rebuilding 26 times over two minutes dropped nothing in
+testing. Wake words are at most a dozen or so characters, so cutting the partial does
+not cost you a detection; the text is matched before the cut, so a wake word sitting at
+the tail of an overgrown partial still fires.
+
+Set it to `0` to keep the old behavior.
 
 ## Browser Support
 

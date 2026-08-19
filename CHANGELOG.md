@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`maxPartialChars`** (default `40`) — rebuild a language's recognizer once its
+  partial result grows past the limit. Vosk only finalizes an utterance when it
+  detects silence, so in a room that never goes quiet the partial grows without
+  bound. A new utterance is then read as a continuation of everything before it
+  and the wake word comes back as a different word; matching also gets slower in
+  proportion to the partial's length. Measured with synthetic speech fed through a
+  virtual microphone, holding everything constant but the moment of the utterance:
+  spoken at 5 s it matched with a 43-character partial, spoken at 120 s it failed
+  three times out of three with the partial pinned at 200 characters, and with the
+  recognizer rebuilt it matched three times out of three at 45 characters. The
+  microphone and `AudioContext` are reused, so there is no gap where the hook stops
+  hearing. The partial is matched before the cut, so a wake word at the tail of an
+  overgrown partial still fires. Set it to `0` for the previous behavior.
+
 ## 1.3.0
 
 ### Added
