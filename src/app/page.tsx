@@ -116,7 +116,7 @@ export default function Home() {
       <div className="mx-auto max-w-2xl px-6 py-16">
         {/* Header */}
         <div className="mb-12 text-center">
-          <h1 className="mb-2 text-4xl font-bold tracking-tight text-white">
+          <h1 className="mb-2 font-display text-4xl font-bold tracking-tight text-white">
             useEar
           </h1>
           <p className="text-zinc-400">
