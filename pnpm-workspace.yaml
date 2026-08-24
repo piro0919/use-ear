@@ -1,0 +1,5 @@
+# pnpm 11 は、ビルドスクリプトを持つ依存を明示するまで install を失敗させる。
+# esbuild は tsup と vitest が、@swc/core は next が使う。
+allowBuilds:
+  "@swc/core": true
+  esbuild: true
