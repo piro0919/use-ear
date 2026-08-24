@@ -9,12 +9,15 @@ export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
 const TITLE = "useEar";
-const DESCRIPTION = "React hook for wake word detection using the Web Speech API.";
+const DESCRIPTION =
+  "React hook for wake word detection using the Web Speech API.";
 
 export default async function Image() {
   /* 見出しの書体はサイトと同じ Sora。使う文字だけに絞ったものを
      同梱している。文言を変えたら assets/README.md の手順で作り直す */
-  const font = await readFile(join(process.cwd(), "assets/Sora-700-subset.ttf"));
+  const font = await readFile(
+    join(process.cwd(), "assets/Sora-700-subset.ttf"),
+  );
 
   return new ImageResponse(
     <div
@@ -36,27 +39,27 @@ export default async function Image() {
           width: 600,
         }}
       >
-      <div
-        style={{
-          display: "flex",
-          fontSize: 84,
-          fontWeight: 700,
-          letterSpacing: -1,
-        }}
-      >
-        {TITLE}
-      </div>
-      <div
-        style={{
-          display: "flex",
-          fontSize: 32,
-          marginTop: 28,
-          lineHeight: 1.4,
-          color: "#a1a1aa",
-        }}
-      >
-        {DESCRIPTION}
-      </div>
+        <div
+          style={{
+            display: "flex",
+            fontSize: 84,
+            fontWeight: 700,
+            letterSpacing: -1,
+          }}
+        >
+          {TITLE}
+        </div>
+        <div
+          style={{
+            display: "flex",
+            fontSize: 32,
+            marginTop: 28,
+            lineHeight: 1.4,
+            color: "#a1a1aa",
+          }}
+        >
+          {DESCRIPTION}
+        </div>
         <div
           style={{
             display: "flex",
@@ -103,6 +106,7 @@ export default async function Image() {
             }}
           >
             <svg
+              aria-hidden="true"
               fill="none"
               height="38"
               viewBox="0 0 24 24"
@@ -116,9 +120,9 @@ export default async function Image() {
             </svg>
           </div>
           <div style={{ alignItems: "center", display: "flex", gap: 7 }}>
-            {[26, 52, 88, 40, 70, 30, 58, 22].map((h, i) => (
+            {[26, 52, 88, 40, 70, 30, 58, 22].map((h) => (
               <div
-                key={i}
+                key={h}
                 style={{
                   background: "#10b981",
                   borderRadius: 999,
@@ -131,13 +135,10 @@ export default async function Image() {
           </div>
         </div>
       </div>
-
     </div>,
     {
       ...size,
-      fonts: [
-        { data: font, name: "Sora", style: "normal", weight: 700 },
-      ],
+      fonts: [{ data: font, name: "Sora", style: "normal", weight: 700 }],
     },
   );
 }

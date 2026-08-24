@@ -23,7 +23,6 @@ const display = Sora({
   weight: ["700"],
 });
 
-
 export const metadata: Metadata = {
   metadataBase: new URL("https://use-ear.kkweb.io"),
   alternates: { canonical: "/" },

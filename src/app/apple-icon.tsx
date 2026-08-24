@@ -20,6 +20,7 @@ export default function AppleIcon() {
       }}
     >
       <svg
+        aria-hidden="true"
         width="120"
         height="120"
         viewBox="-150 -150 300 300"
@@ -42,6 +43,6 @@ export default function AppleIcon() {
         />
       </svg>
     </div>,
-    { ...size }
+    { ...size },
   );
 }

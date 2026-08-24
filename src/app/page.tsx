@@ -529,9 +529,11 @@ export default function Home() {
           <pre className="mt-3 overflow-x-auto font-mono text-sm text-zinc-300">
             npm i use-ear
           </pre>
-          <div className="mt-6 text-xs tracking-widest text-zinc-500">USAGE</div>
+          <div className="mt-6 text-xs tracking-widest text-zinc-500">
+            USAGE
+          </div>
           <pre className="mt-3 overflow-x-auto font-mono text-sm leading-relaxed text-zinc-300">
-{`const { isListening, start, stop, transcript } = useEar({
+            {`const { isListening, start, stop, transcript } = useEar({
   wakeWords: ["hey", { word: "ヘイ", language: "ja-JP" }],
   onWakeWord: (word, transcript) => console.log(word, transcript),
   stopWords: ["stop"],

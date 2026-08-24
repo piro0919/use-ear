@@ -1,7 +1,7 @@
 "use client";
 
-import type { ReactNode } from "react";
 import { SerwistProvider as OriginalSerwistProvider } from "@serwist/turbopack/react";
+import type { ReactNode } from "react";
 
 type SerwistProviderProps = {
   children: ReactNode;
