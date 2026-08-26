@@ -303,16 +303,16 @@ Web Speech API is supported in:
 
 ```bash
 # Install dependencies
-npm install
+pnpm install
 
 # Run demo
-npm run dev
+pnpm dev
 
 # Build library
-npm run build:lib
+pnpm build:lib
 
 # Lint
-npm run lint
+pnpm lint
 ```
 
 ## License
