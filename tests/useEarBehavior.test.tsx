@@ -127,6 +127,16 @@ describe("useEar with a speech engine", () => {
     expect(onWakeWord).toHaveBeenCalledWith("こんにちは", "こんにちは");
   });
 
+  it("ignores an empty wake word instead of firing on any speech", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { onWakeWord } = await startedHook({ wakeWords: ["", "こんにちは"] });
+    act(() => latest().result(["なにか別の話"]));
+    expect(onWakeWord).not.toHaveBeenCalled();
+    act(() => latest().result(["こんにちは"]));
+    expect(onWakeWord).toHaveBeenCalledWith("こんにちは", "こんにちは");
+    warn.mockRestore();
+  });
+
   it("does not fire on unrelated speech", async () => {
     const { onWakeWord } = await startedHook();
     act(() => latest().result(["さようなら"]));

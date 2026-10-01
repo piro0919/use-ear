@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- **BREAKING (behavior):** An empty or whitespace-only wake word or stop word is
+  ignored instead of matching every utterance. `useEar`, `useEarVosk` and
+  `normalizeWakeWords` drop it and, outside production, warn once with
+  `console.warn`. The exported `matchWord` and `fuzzyIncludes` return `false`
+  for an empty word; they used to return `true`.
 - **BREAKING (behavior):** `useEar` stops on the Web Speech API errors
   `not-allowed`, `service-not-allowed` and `audio-capture` instead of restarting
   every 100 ms. It releases the keep-alive audio and the wake lock, leaves `error`

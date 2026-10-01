@@ -49,10 +49,10 @@ export const fuzzyIncludes = (
   word: string,
   threshold: number,
 ): boolean => {
-  if (text.includes(word)) return true;
-
+  // 空のワードは何にも一致させない (空文字はどの文字列にも含まれる)
   const wlen = word.length;
   if (wlen === 0) return false;
+  if (text.includes(word)) return true;
 
   // ワードが短いほど誤発火しやすいので閾値を引き上げる
   const effectiveThreshold = wlen <= 3 ? Math.max(threshold, 0.9) : threshold;
@@ -83,13 +83,31 @@ export interface NormalizedWakeWord {
   language: string;
 }
 
+let warnedEmptyWord = false;
+
+const isDev = (): boolean =>
+  typeof process === "undefined" || process.env?.NODE_ENV !== "production";
+
+/**
+ * 空・空白だけのワードは捨てる。空文字はどの文字列にも含まれるので、
+ * 残すと何を話しても発火してしまう。開発時だけ一度警告を出す。
+ */
 export const normalizeWakeWords = (
   wakeWords: WakeWordInput[],
   defaultLanguage: string,
-): NormalizedWakeWord[] =>
-  wakeWords.map((w) =>
+): NormalizedWakeWord[] => {
+  const normalized = wakeWords.map((w) =>
     typeof w === "string" ? { word: w, language: defaultLanguage } : w,
   );
+  const valid = normalized.filter((w) => w.word.trim() !== "");
+  if (valid.length !== normalized.length && !warnedEmptyWord && isDev()) {
+    warnedEmptyWord = true;
+    console.warn(
+      "[use-ear] Ignoring an empty or whitespace-only wake word or stop word: it would match any speech.",
+    );
+  }
+  return valid;
+};
 
 export const getUniqueLanguages = (
   wakeWords: NormalizedWakeWord[],
@@ -122,6 +140,8 @@ export const matchWord = (
   word: string,
   similarityThreshold?: number,
 ): boolean => {
+  // 正規化で空になったワードも含め、空のワードは発火させない
+  if (word.length === 0) return false;
   if (
     typeof similarityThreshold === "number" &&
     similarityThreshold > 0 &&

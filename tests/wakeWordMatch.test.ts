@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   fuzzyIncludes,
   getUniqueLanguages,
@@ -70,11 +70,10 @@ describe("fuzzyIncludes", () => {
     expect(fuzzyIncludes("こん", "こんにちは", 0.8)).toBe(false);
   });
 
-  // Locks in current behavior: the substring check runs first, and every string
-  // contains "". An empty wake word therefore fires on any speech.
-  it("treats an empty word as contained in anything", () => {
-    expect(fuzzyIncludes("なにか", "", 0.5)).toBe(true);
-    expect(fuzzyIncludes("", "", 0.5)).toBe(true);
+  // Every string contains "", so an empty word would fire on any speech.
+  it("never matches an empty word", () => {
+    expect(fuzzyIncludes("なにか", "", 0.5)).toBe(false);
+    expect(fuzzyIncludes("", "", 0.5)).toBe(false);
   });
 });
 
@@ -86,6 +85,11 @@ describe("matchWord", () => {
 
   it("goes fuzzy with a threshold in (0, 1]", () => {
     expect(matchWord("あのこんにちわです", "こんにちは", 0.8)).toBe(true);
+  });
+
+  it("never matches an empty word", () => {
+    expect(matchWord("なにか", "")).toBe(false);
+    expect(matchWord("なにか", "", 0.8)).toBe(false);
   });
 
   it.each([0, -1, 1.5, Number.NaN])(
@@ -125,6 +129,18 @@ describe("normalizeWakeWords / getUniqueLanguages", () => {
       { language: "en-US", word: "hello" },
       { language: "ja-JP", word: "やあ" },
     ]);
+  });
+
+  it("drops empty and whitespace-only words with one warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const words = ["", "  ", { language: "ja-JP", word: "\u3000" }, "hello"];
+    expect(normalizeWakeWords(words, "en-US")).toEqual([
+      { language: "en-US", word: "hello" },
+    ]);
+    expect(normalizeWakeWords(words, "en-US")).toHaveLength(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain("empty or whitespace-only");
+    warn.mockRestore();
   });
 
   it("lists each language once, in first-seen order", () => {
