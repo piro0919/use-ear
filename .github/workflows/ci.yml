@@ -22,3 +22,77 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build:lib
+      - name: dist starts with "use client"
+        run: |
+          for file in dist/index.js dist/index.cjs; do
+            head -n 1 "$file" | grep -qx '"use client";' || {
+              echo "$file does not start with \"use client\"" >&2
+              exit 1
+            }
+          done
+      - run: pnpm check:package
+
+  # The tests on every Node line the dev toolchain runs on. pnpm 11 needs
+  # Node >= 22.13, so older lines only get the load check below.
+  node:
+    name: node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+
+  # peerDependencies says react >=18, so the tests run on 18 too. Only the
+  # tests: typecheck covers the Next.js demo, which needs React 19.
+  react18:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm add -D react@18 react-dom@18 @types/react@18 @types/react-dom@18
+      - run: node -e "if (!require('react/package.json').version.startsWith('18.')) process.exit(1)"
+      - run: pnpm test
+
+  # `engines` allows Node 18 and 20 — the hooks are imported during SSR. Build
+  # on 22 and check the build loads there through both entry points.
+  old-node-load:
+    name: load on node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [18, 20]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:lib
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: node -e "const m = require('use-ear'); if (typeof m.useEar !== 'function' || typeof m.useEarVosk !== 'function') process.exit(1)"
+      - run: node --input-type=module -e "const m = await import('use-ear'); if (typeof m.useEar !== 'function' || typeof m.useEarVosk !== 'function') process.exit(1)"

@@ -50,6 +50,19 @@ The hook provides:
 
 ## Development Notes
 
+- `dist` must start with `"use client"`. tsup's `banner` puts it there; `treeshake`
+  is off because its pass drops the banner (and esbuild drops in-file directives).
+  CI checks the first line of both builds.
+- `peerDependencies.react` is `>=18`: the hooks use only `useState`, `useEffect`,
+  `useRef` and `useCallback`. CI runs the tests on React 18 too. Do not let a
+  Renovate range bump raise this floor.
+- `pnpm check:package` runs publint and attw; `require` must resolve to
+  `index.d.cts`.
+- The Web Speech API errors `not-allowed`, `service-not-allowed` and
+  `audio-capture` stop listening instead of restarting every 100 ms.
+- The wake lock sentinel's `release` event clears `wakeLockRef`, so the
+  `visibilitychange` handler can take it again after the browser auto-releases it.
+
 - The library exports from `src/index.ts` and builds to `dist/`
 - Demo app runs on Next.js but the library itself has no Next.js dependency
 - Web Speech API types are defined locally in `useEar.ts` for cross-browser compatibility
