@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **BREAKING (behavior):** `useEar` stops on the Web Speech API errors
+  `not-allowed`, `service-not-allowed` and `audio-capture` instead of restarting
+  every 100 ms. It releases the keep-alive audio and the wake lock, leaves `error`
+  set to `Speech recognition error: <code>`, and waits for `start()`. Other errors
+  restart as before.
+- `useEar` with `screenLock` takes the wake lock again when the page becomes
+  visible. The browser releases it on its own when the page is hidden, but the
+  hook kept the released sentinel and thought it still held one. It now listens
+  for the sentinel's `release` event. A lock acquired after `stop()` is released
+  at once.
+- The built files start with `"use client"`. The source has it, but esbuild drops
+  in-file directives when bundling, so the published build never carried it.
+- `require` consumers get `index.d.cts`; both conditions used to point at
+  `index.d.ts`.
+- `peerDependencies.react` is back to `>=18`. A Renovate range bump had raised it
+  to `>=19.2.8`, though the hooks use nothing newer than React 16.8 and the tests
+  pass on React 18.
+
+### Added
+
+- `engines.node` (`>=18`). CI checks the packed package with `publint --strict`
+  and `attw` (`pnpm check:package`), checks that `dist` starts with
+  `"use client"`, runs the tests on Node 22 and 24 and on React 18, and checks
+  the build loads on Node 18 and 20.
+- Behavior tests for `useEar` (detection, stop words, language rotation,
+  restarts, unrecoverable errors, wake lock) and for the matching helpers.
+
+### Documentation
+
+- The README says prominently that without `models` or `modelUrl`, `useEarVosk`
+  downloads models from the author's own server, with no SLA, and that production
+  apps should host them. The option docs say the same.
+
 ## 1.4.0
 
 ### Added
