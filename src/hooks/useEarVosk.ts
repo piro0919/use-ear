@@ -69,9 +69,16 @@ export interface UseEarVoskOptions {
    * 言語コード -> モデル tar.gz URL のマップ。
    * 複数指定すると全モデルを同時ロードし、同じ音声を各 recognizer に並列で流す。
    * 未指定なら { [language]: modelUrl } の単一モデルとして扱う。
+   *
+   * **本番では models か modelUrl を必ず指定すること。** どちらも無いと
+   * `DEFAULT_MODELS` の URL、つまり作者個人が運用するサーバー
+   * (https://models.use-ear.kkweb.io) から 40〜90MB を取得する。SLA は無い。
    */
   models?: Record<string, string>;
-  /** 単一モデル時の URL (models 未指定時のフォールバック) */
+  /**
+   * 単一モデル時の URL (models 未指定時のフォールバック)。
+   * models も modelUrl も無いと作者個人のサーバーから取得する (models の説明を参照)。
+   */
   modelUrl?: string;
   /** default language (bare string の語に割り当てる言語) */
   language?: string;
@@ -197,7 +204,8 @@ export interface UseEarVoskReturn {
 }
 
 // 既定のモデル配信元 (Cloudflare R2 のカスタムドメイン, CDN 前段 / egress 無料 /
-// CORS 許可済み)。利用者は models / modelUrl を渡して自前ホストに差し替え可能。
+// CORS 許可済み)。作者個人が運用しているサーバーで、SLA は無い。README の Models 節で
+// 目立つように明記してある。本番では models / modelUrl を渡して自前ホストに差し替える。
 const R2_MODELS_BASE = "https://models.use-ear.kkweb.io";
 
 /**

@@ -131,9 +131,17 @@ function App() {
 
 ### Models
 
+> [!IMPORTANT]
+> **Without `models` or `modelUrl`, models are downloaded from the author's own
+> server** (`https://models.use-ear.kkweb.io`, a Cloudflare R2 bucket run by the
+> maintainer of this package). Your users' browsers fetch 40–90 MB from it on
+> first use. It is a convenience for demos and prototypes, with no SLA and no
+> guarantee it stays up. **For production, host the models yourself and pass
+> `modelUrl` or `models`** — see "Self-hosting" below.
+
 Vosk needs a language model (a `.tar.gz` of a Vosk "small" model). It is **never bundled** in this package — you point the hook at a URL.
 
-- **Default (zero-config):** if you pass neither `models` nor `modelUrl`, the hook loads the model for `language` from a convenience CDN (Cloudflare R2, CORS-enabled). See `DEFAULT_MODELS` for the list of built-in language URLs.
+- **Default (zero-config):** if you pass neither `models` nor `modelUrl`, the hook loads the model for `language` from the author's server above (Cloudflare R2, CORS-enabled). See `DEFAULT_MODELS` for the list of built-in language URLs.
 - **Multiple languages at once:** pass a `models` map. Every model is loaded in parallel and the same audio is matched against each (words are matched only against the recognizer of their own `language`).
 
   ```tsx
@@ -194,6 +202,15 @@ Vosk needs a language model (a `.tar.gz` of a Vosk "small" model). It is **never
 | `error`       | `Error \| null` | Error if any                    |
 | `transcript`  | `string`        | Last recognized text            |
 
+#### Errors that stop listening
+
+`not-allowed`, `service-not-allowed` and `audio-capture` (permission denied, speech
+service disabled, no microphone) would fail the same way on every restart, so the
+hook stops — releasing the keep-alive audio and the wake lock — and sets `error` to
+`Speech recognition error: <code>`. Call `start()` again once the cause is fixed.
+Other errors, such as `no-speech` or `network`, are reported in `error` and
+listening restarts as before.
+
 ## API — `useEarVosk` (on-device)
 
 Requires the optional peer dependency: `npm install vosk-browser`.
@@ -206,8 +223,8 @@ Requires the optional peer dependency: `npm install vosk-browser`.
 | `onWakeWord`          | `(word: string, transcript: string) => void`                           | required       | Callback when a wake word is detected                                                                                                             |
 | `stopWords`           | `(string \| WakeWord)[]`                                               | `[]`           | Words that stop listening when detected                                                                                                           |
 | `onStopWord`          | `(word: string, transcript: string) => void`                           | -              | Callback when a stop word is detected                                                                                                             |
-| `models`              | `Record<string, string>`                                               | -              | `language` → model `.tar.gz` URL. Multiple entries load in parallel and match each language against its own recognizer                            |
-| `modelUrl`            | `string`                                                               | -              | Single-model URL (used when `models` is omitted)                                                                                                  |
+| `models`              | `Record<string, string>`                                               | -              | `language` → model `.tar.gz` URL. Multiple entries load in parallel and match each language against its own recognizer. **Set this or `modelUrl` in production** — without either, models come from the author's server |
+| `modelUrl`            | `string`                                                               | -              | Single-model URL (used when `models` is omitted). **Set this or `models` in production** — without either, the model comes from the author's server |
 | `language`            | `string`                                                               | `"ja-JP"`      | Language for bare-string words, and the single default model                                                                                      |
 | `caseSensitive`       | `boolean`                                                              | `false`        | Case-sensitive matching                                                                                                                           |
 | `normalize`           | `boolean`                                                              | `true`         | Normalize text before matching                                                                                                                    |
@@ -218,7 +235,7 @@ Requires the optional peer dependency: `npm install vosk-browser`.
 | `audioSource`         | `"microphone" \| "external"`                                           | `"microphone"` | Where audio comes from. `"external"` never touches the microphone — you feed frames in with `pushAudio()`                                         |
 | `maxPartialChars`     | `number`                                                               | `40`           | Rebuild a language's recognizer once its partial grows this long. `0` disables it. See "Noisy rooms" below                                        |
 
-Model resolution: `models` wins; otherwise the single `language` model is taken from `modelUrl` or, if omitted, from `DEFAULT_MODELS[language]` (the default CDN).
+Model resolution: `models` wins; otherwise the single `language` model is taken from `modelUrl` or, if omitted, from `DEFAULT_MODELS[language]` — the author's server (`https://models.use-ear.kkweb.io`).
 
 ### Return Values
 
