@@ -112,6 +112,14 @@ const stopKeepAlive = (keepAlive: AudioKeepAlive) => {
   }
 };
 
+// これらのエラーは再開しても同じ結果になる (権限拒否・サービス無効・マイク無し)。
+// 再開を続けると 100ms ごとに失敗を繰り返すだけなので、止めてエラーを出す。
+const UNRECOVERABLE_ERRORS = new Set([
+  "not-allowed",
+  "service-not-allowed",
+  "audio-capture",
+]);
+
 // Wake Lock API
 const requestWakeLock = async (): Promise<WakeLockSentinel | null> => {
   if (typeof navigator === "undefined" || !("wakeLock" in navigator)) {
@@ -204,6 +212,23 @@ export function useEar(options: UseEarOptions): UseEarReturn {
   const isSupported = hasMounted && getSpeechRecognition() !== null;
 
   const stopRef = useRef<() => void>(() => {});
+
+  // Wake Lock を取得して ref に入れる。ページが非表示になるとブラウザが自動で解放するので、
+  // release イベントで ref を空に戻す。戻さないと、表示に戻ったときの再取得が
+  // 「まだ持っている」と判断して何もしない。
+  const acquireWakeLock = useCallback(async () => {
+    const sentinel = await requestWakeLock();
+    if (!sentinel) return;
+    if (!shouldContinueRef.current || wakeLockRef.current) {
+      // 取得を待つ間に stop() されたか、別の経路で既に取得済み
+      await releaseWakeLock(sentinel);
+      return;
+    }
+    sentinel.addEventListener("release", () => {
+      if (wakeLockRef.current === sentinel) wakeLockRef.current = null;
+    });
+    wakeLockRef.current = sentinel;
+  }, []);
 
   // 照合用にテキストを変換: 大文字小文字 + 任意の正規化処理
   const transformForMatch = useCallback(
@@ -325,6 +350,11 @@ export function useEar(options: UseEarOptions): UseEarReturn {
       };
 
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+        if (UNRECOVERABLE_ERRORS.has(event.error)) {
+          // onend での自動再開を止める。stop() はキープアライブと Wake Lock も手放す
+          shouldContinueRef.current = false;
+          stopRef.current();
+        }
         setError(new Error(`Speech recognition error: ${event.error}`));
         setIsListening(false);
       };
@@ -378,12 +408,14 @@ export function useEar(options: UseEarOptions): UseEarReturn {
 
     // screenLockが有効な場合、画面の自動ロックを防ぐ
     if (screenLock && !wakeLockRef.current) {
-      wakeLockRef.current = await requestWakeLock();
+      await acquireWakeLock();
+      // 取得を待つ間に stop() された
+      if (!shouldContinueRef.current) return;
     }
 
     const initialLang = languagesRef.current[0] || language;
     startWithLanguage(initialLang);
-  }, [keepAlive, screenLock, language, startWithLanguage]);
+  }, [keepAlive, screenLock, language, startWithLanguage, acquireWakeLock]);
 
   const stop = useCallback(async () => {
     shouldContinueRef.current = false;
@@ -417,7 +449,7 @@ export function useEar(options: UseEarOptions): UseEarReturn {
         shouldContinueRef.current &&
         !wakeLockRef.current
       ) {
-        wakeLockRef.current = await requestWakeLock();
+        await acquireWakeLock();
       }
     };
 
@@ -425,7 +457,7 @@ export function useEar(options: UseEarOptions): UseEarReturn {
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [screenLock]);
+  }, [screenLock, acquireWakeLock]);
 
   // クリーンアップ
   useEffect(() => {
