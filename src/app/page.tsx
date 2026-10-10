@@ -562,6 +562,15 @@ export default function Home() {
             >
               npm
             </a>
+            <span>·</span>
+            <a
+              className="text-zinc-400 hover:text-zinc-200 underline"
+              href="https://buymeacoffee.com/piro0919"
+              rel="noopener noreferrer"
+              target="_blank"
+            >
+              Buy Me a Coffee
+            </a>
           </div>
         </div>
       </div>
