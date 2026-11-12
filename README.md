@@ -241,7 +241,7 @@ Model resolution: `models` wins; otherwise the single `language` model is taken 
 
 | Value            | Type                                                                      | Description                                                                                                             |
 | ---------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `status`         | `"idle" \| "loading-model" \| "requesting-mic" \| "listening" \| "error"` | Engine state                                                                                                            |
+| `status`         | `"idle" \| "loading-model" \| "requesting-mic" \| "listening" \| "error"` | Engine state. `"error"` when `start()` fails (model download or load, microphone); `error` holds the reason             |
 | `isListening`    | `boolean`                                                                 | Currently listening                                                                                                     |
 | `isSupported`    | `boolean`                                                                 | Environment can run on-device STT (AudioContext + getUserMedia + WebAssembly). `false` during SSR; resolves after mount |
 | `loadProgress`   | `number \| null`                                                          | Model download progress (0–1)                                                                                           |

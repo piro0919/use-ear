@@ -45,14 +45,18 @@ class FakeRecognizer {
   }
 }
 
-const fakeModel = {
-  KaldiRecognizer: FakeRecognizer,
-  terminate: (): void => {},
-};
+// 読み込みはすぐ成功させる。失敗の扱いは useEarVoskModelLoad.test.tsx が見る。
+class FakeModel {
+  KaldiRecognizer = FakeRecognizer;
 
-vi.mock("vosk-browser", () => ({
-  createModel: vi.fn(async () => fakeModel),
-}));
+  on(event: string, cb: (m: { result: boolean }) => void): void {
+    if (event === "load") queueMicrotask(() => cb({ result: true }));
+  }
+
+  terminate(): void {}
+}
+
+vi.mock("vosk-browser", () => ({ Model: FakeModel }));
 
 const MODELS = { "ja-JP": "http://models.test/ja.tar.gz" };
 const WAKE_WORDS = ["食事記録を開始"];

@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.0.1 - 2026-11-12
+
+### Fixed
+
+- `useEarVosk` no longer stays in `"loading-model"` forever when a model fails to
+  load (for example a 404 on the model URL). vosk-browser's `createModel` only
+  waits for the worker's `load` message and never settles on `error`, so the hook
+  now builds `Model` itself and rejects on a failed `load` or an `error`. The
+  half-started worker is terminated directly; `Model.terminate()` would make it
+  throw `Cannot read properties of undefined (reading 'delete')`.
+- When `start()` fails, `status` ends as `"error"`. It used to set `"error"` and
+  then call `stop()`, which set `"idle"` in the same render, so `"error"` was never
+  observable and only `error` carried the failure.
+
 ## 2.0.0 - 2026-10-01
 
 ### Fixed

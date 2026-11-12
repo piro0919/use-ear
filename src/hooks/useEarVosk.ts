@@ -45,7 +45,61 @@ interface VoskModel {
   KaldiRecognizer: new (sampleRate: number, grammar?: string) => VoskRecognizer;
   terminate(): void;
 }
-type CreateModel = (modelUrl: string, logLevel?: number) => Promise<VoskModel>;
+interface VoskModelLoadMessage {
+  result?: boolean;
+  error?: string;
+}
+interface VoskLoadingModel extends VoskModel {
+  // vosk-browser では private。読み込みに失敗したときに Worker を直に止めるために読む。
+  worker?: { terminate(): void };
+  on(
+    event: "load" | "error",
+    cb: (message: VoskModelLoadMessage) => void,
+  ): void;
+}
+type VoskModelConstructor = new (
+  modelUrl: string,
+  logLevel?: number,
+) => VoskLoadingModel;
+
+/**
+ * モデルを読み込む。vosk-browser の createModel は使わない。
+ *
+ * createModel は "load" しか待たず、読み込みに失敗して Worker が "error" を送っても
+ * Promise が解決しない (0.0.8 時点)。モデルの URL が 404 のとき、フックは
+ * "loading-model" のまま止まり、利用者に失敗を伝えられなかった。ここでは "load" の
+ * 失敗と "error" の両方で reject し、作りかけの Worker を止める。
+ *
+ * 止めるときは Model.terminate() を呼ばず、Worker を直に止める。Model.terminate() は
+ * Worker に "terminate" を送るだけで、受けた Worker は読み込めていないモデルを
+ * 消そうとして "Cannot read properties of undefined (reading 'delete')" で落ちる。
+ */
+function loadVoskModel(
+  Model: VoskModelConstructor,
+  url: string,
+): Promise<VoskModel> {
+  return new Promise((resolve, reject) => {
+    const model = new Model(url);
+    let settled = false;
+    const fail = (reason: string): void => {
+      if (settled) return;
+      settled = true;
+      if (model.worker) model.worker.terminate();
+      else model.terminate();
+      reject(new Error(`Failed to load vosk model (${url}): ${reason}`));
+    };
+    model.on("load", (message) => {
+      if (!message.result) {
+        fail("the worker could not load the model");
+        return;
+      }
+      if (settled) return;
+      settled = true;
+      resolve(model);
+    });
+    model.on("error", (message) => fail(message.error ?? "unknown error"));
+  });
+}
 
 export interface UseEarVoskOptions {
   /**
@@ -652,8 +706,8 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
       if (t > 0) publishLoadProgress(Math.min(1, r / t));
     };
 
-    const { createModel } = (await import("vosk-browser")) as unknown as {
-      createModel: CreateModel;
+    const { Model } = (await import("vosk-browser")) as unknown as {
+      Model: VoskModelConstructor;
     };
 
     await Promise.all(
@@ -680,9 +734,9 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
                 }
               }
             } catch {
-              // 進捗取得に失敗しても createModel が自分で取りに行くので続行する
+              // 進捗取得に失敗してもモデルは Worker が自分で取りに行くので続行する
             }
-            const model = await createModel(url);
+            const model = await loadVoskModel(Model, url);
             modelsRef.current.set(lang, model);
             return model;
           })();
@@ -881,9 +935,11 @@ export function useEarVosk(options: UseEarVoskOptions): UseEarVoskReturn {
     } catch (e) {
       // 割り込まれた後の失敗は、次の起動が面倒を見るのでここでは触らない。
       if (abandoned()) return;
+      // 片付けてから error を置く。stop() は最後に status を "idle" にするので、
+      // 先に "error" を置くと同じ描画にまとめられ、"error" が一度も見えなくなる。
+      stop();
       setError(e instanceof Error ? e : new Error("Failed to start vosk"));
       setStatus("error");
-      stop();
     } finally {
       // 自分が最後の起動である間だけ在庫フラグを下ろす。割り込まれている場合は
       // 新しい起動が握っているので触らない。
