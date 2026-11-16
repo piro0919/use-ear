@@ -124,7 +124,7 @@
   recognition.** `start()` guarded against re-entry with the `status` state, so
   calls made before React re-rendered all saw `idle` and went through. Each one
   took its own microphone and audio graph, and because the processor read the
-  recognizer list through a ref, every graph fed the *current* recognizer. The
+  recognizer list through a ref, every graph fed the _current_ recognizer. The
   same audio arrived two to five times over, so speech decoded as a much longer
   utterance: a Japanese wake word came back as unrelated words. The guard is now
   a ref, and each audio graph only feeds the recognizers it created.

@@ -37,6 +37,7 @@ npm run format       # Format code with Biome
 ### Core Hook (`useEar`)
 
 The hook provides:
+
 - Wake word detection via Web Speech API
 - Multi-language support with language rotation
 - Mobile keep-alive using silent audio playback
