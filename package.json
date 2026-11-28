@@ -75,7 +75,7 @@
     "@tailwindcss/postcss": "^4.3.5",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^20.19.43",
-    "@types/react": "^19.3.1",
+    "@types/react": "^19.3.3",
     "@types/react-dom": "^19.3.0",
     "@vercel/analytics": "2.0.1",
     "babel-plugin-react-compiler": "1.0.0",
@@ -90,7 +90,7 @@
     "tailwindcss": "^4.3.5",
     "tsup": "^9.0.0",
     "typescript": "^5.9.3",
-    "vitest": "^5.1.1",
+    "vitest": "^5.1.2",
     "vosk-browser": "^0.0.8"
   },
   "engines": {
